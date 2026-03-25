@@ -4,11 +4,11 @@ plugins {
 }
 
 android {
-    namespace 'com.mauri.tradingbot'
+    namespace 'com.mauri.appscannertokens'
     compileSdk 34
 
     defaultConfig {
-        applicationId "com.mauri.tradingbot"
+        applicationId "com.mauri.appscannertokens"
         minSdk 26
         targetSdk 34
         versionCode 1
@@ -33,6 +33,7 @@ dependencies {
     implementation 'com.google.firebase:firebase-analytics'
     implementation 'com.google.firebase:firebase-messaging'
     implementation 'com.google.firebase:firebase-installations'
+    implementation 'com.google.firebase:firebase-database:22.0.1'
 
     // DataStore y Lifecycle
     implementation 'androidx.datastore:datastore-preferences:1.0.0'
@@ -40,5 +41,10 @@ dependencies {
     implementation 'androidx.lifecycle:lifecycle-viewmodel-ktx:2.6.2'
     implementation 'androidx.lifecycle:lifecycle-livedata-ktx:2.6.2'
 
+    // Trading Indicators (ta4j) - Version 0.15 is compatible with Java 17
+    implementation 'org.ta4j:ta4j-core:0.15'
 
+    // Networking & JSON
+    implementation 'com.squareup.okhttp3:okhttp:4.12.0'
+    implementation 'com.google.code.gson:gson:2.11.0'
 }

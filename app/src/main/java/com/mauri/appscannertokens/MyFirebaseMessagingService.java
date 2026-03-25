@@ -1,4 +1,4 @@
-package com.mauri.tradingbot;
+package com.mauri.appscannertokens;
 
 import android.app.NotificationChannel;
 import android.app.NotificationManager;

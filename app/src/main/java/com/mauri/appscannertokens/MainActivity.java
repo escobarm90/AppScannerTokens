@@ -1,4 +1,4 @@
-package com.mauri.tradingbot;
+package com.mauri.appscannertokens;
 
 import android.content.BroadcastReceiver;
 import android.content.Context;

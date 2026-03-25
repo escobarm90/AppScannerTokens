@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
-    package="com.mauri.tradingbot">
+    package="com.mauri.appscannertokens">
 
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
@@ -10,7 +10,7 @@
         android:allowBackup="true"
         android:icon="@android:drawable/ic_dialog_info"
         android:roundIcon="@android:drawable/ic_dialog_info"
-        android:label="Alertas Trading"
+        android:label="AppScannerTokens"
         android:supportsRtl="true"
         android:theme="@style/Theme.AppCompat.NoActionBar">
 
