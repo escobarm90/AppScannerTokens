@@ -166,7 +166,7 @@ public class TradingScannerService extends Service {
                 double vol = k.get(5).getAsDouble();
 
                 ZonedDateTime endTime = ZonedDateTime.ofInstant(Instant.ofEpochMilli(closeTime), ZoneId.systemDefault());
-                serie.addBar(new BaseBar(Duration.ofMinutes(3), endTime, open, high, low, close, vol, 0));
+                serie.addBar(new BaseBar(Duration.ofMinutes(3), endTime, serie.numOf(open), serie.numOf(high), serie.numOf(low), serie.numOf(close), serie.numOf(vol), serie.numOf(0)));
             }
             mercado.put(symbol, serie);
         }
@@ -203,9 +203,14 @@ public class TradingScannerService extends Service {
                 boolean isClosed = kline.get("x").getAsBoolean();
 
                 ZonedDateTime endTime = ZonedDateTime.ofInstant(Instant.ofEpochMilli(closeTime), ZoneId.systemDefault());
-                Bar vela = new BaseBar(Duration.ofMinutes(3), endTime, open, high, low, close, vol, 0);
 
+                // 1. PRIMERO traemos la serie de la memoria
                 BarSeries serie = mercado.get(symbol);
+
+                // 2. AHORA SÍ armamos la vela usando la precisión de la serie
+                Bar vela = new BaseBar(Duration.ofMinutes(3), endTime, serie.numOf(open), serie.numOf(high), serie.numOf(low), serie.numOf(close), serie.numOf(vol), serie.numOf(0));
+
+                // 3. Y la agregamos
                 serie.addBar(vela, !isClosed);
 
                 calcularIndicadores(symbol, serie);
