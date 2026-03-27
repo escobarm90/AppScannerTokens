@@ -9,12 +9,11 @@
     <option name="autoReloadType" value="NONE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="f47cbd80-7e7b-4408-8a49-fc9584e2fa18" name="Changes" comment="Version 1.2 funcionando">
+    <list default="true" id="f47cbd80-7e7b-4408-8a49-fc9584e2fa18" name="Changes" comment="Version 1.2.2 funcionando, configuraciones usuario">
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/app/src/main/java/com/mauri/appscannertokens/ConfigActivity.kt" beforeDir="false" afterPath="$PROJECT_DIR$/app/src/main/java/com/mauri/appscannertokens/ConfigActivity.kt" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/app/src/main/java/com/mauri/appscannertokens/ConfigScreen.kt" beforeDir="false" afterPath="$PROJECT_DIR$/app/src/main/java/com/mauri/appscannertokens/ConfigScreen.kt" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/app/src/main/java/com/mauri/appscannertokens/ConfigViewModel.kt" beforeDir="false" afterPath="$PROJECT_DIR$/app/src/main/java/com/mauri/appscannertokens/ConfigViewModel.kt" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/app/src/main/java/com/mauri/appscannertokens/Constants.kt" beforeDir="false" afterPath="$PROJECT_DIR$/app/src/main/java/com/mauri/appscannertokens/Constants.kt" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/app/src/main/java/com/mauri/appscannertokens/MainActivity.kt" beforeDir="false" afterPath="$PROJECT_DIR$/app/src/main/java/com/mauri/appscannertokens/MainActivity.kt" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/app/src/main/java/com/mauri/appscannertokens/TradingScannerService.kt" beforeDir="false" afterPath="$PROJECT_DIR$/app/src/main/java/com/mauri/appscannertokens/TradingScannerService.kt" afterDir="false" />
     </list>
@@ -348,7 +347,15 @@
       <option name="project" value="LOCAL" />
       <updated>1774613426687</updated>
     </task>
-    <option name="localTasksCounter" value="13" />
+    <task id="LOCAL-00013" summary="Version 1.2.2 funcionando, configuraciones usuario">
+      <option name="closed" value="true" />
+      <created>1774620655247</created>
+      <option name="number" value="00013" />
+      <option name="presentableId" value="LOCAL-00013" />
+      <option name="project" value="LOCAL" />
+      <updated>1774620655247</updated>
+    </task>
+    <option name="localTasksCounter" value="14" />
     <servers />
   </component>
   <component name="Vcs.Log.Tabs.Properties">
@@ -374,7 +381,8 @@
     <MESSAGE value="Version 1.1.3 funcionando" />
     <MESSAGE value="Version 1.1.3 no anda" />
     <MESSAGE value="Version 1.2 funcionando" />
-    <option name="LAST_COMMIT_MESSAGE" value="Version 1.2 funcionando" />
+    <MESSAGE value="Version 1.2.2 funcionando, configuraciones usuario" />
+    <option name="LAST_COMMIT_MESSAGE" value="Version 1.2.2 funcionando, configuraciones usuario" />
   </component>
   <component name="github-copilot-workspace">
     <instructionFileLocations>

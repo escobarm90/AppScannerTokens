@@ -74,7 +74,7 @@ class ConfigViewModel(application: Application) : AndroidViewModel(application) 
                 client.newCall(request).execute().use { response ->
                     if (response.isSuccessful) {
                         mensajeValidacion = "✅ API Validada: Conectado a Binance"
-                        guardarConfiguracion() // Guardamos si es correcta
+                        guardarConfiguracion()
                     } else {
                         mensajeValidacion = "❌ Error: API Key o Secret inválidos"
                     }

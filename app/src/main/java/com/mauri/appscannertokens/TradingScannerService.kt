@@ -22,18 +22,11 @@ import org.ta4j.core.BaseBarSeriesBuilder
 import org.ta4j.core.indicators.ATRIndicator
 import org.ta4j.core.indicators.RSIIndicator
 import org.ta4j.core.indicators.averages.EMAIndicator
-import org.ta4j.core.indicators.averages.SMAIndicator
-import org.ta4j.core.indicators.bollinger.BollingerBandsLowerIndicator
-import org.ta4j.core.indicators.bollinger.BollingerBandsMiddleIndicator
-import org.ta4j.core.indicators.bollinger.BollingerBandsUpperIndicator
 import org.ta4j.core.indicators.helpers.ClosePriceIndicator
-import org.ta4j.core.indicators.statistics.StandardDeviationIndicator
 import org.ta4j.core.num.DoubleNum
 import java.nio.charset.StandardCharsets
-import java.text.SimpleDateFormat
 import java.time.Duration
 import java.time.Instant
-import java.util.Date
 import java.util.Locale
 import java.util.concurrent.ConcurrentHashMap
 import javax.crypto.Mac
@@ -73,7 +66,7 @@ class TradingScannerService : Service() {
             val notification = NotificationCompat.Builder(this, CHANNEL_ID)
                 .setContentTitle("Motor Scanner Activo")
                 .setContentText("Monitoreando pares en vivo...")
-                .setSmallIcon(R.mipmap.ic_launcher)
+                .setSmallIcon(android.R.drawable.ic_menu_compass) // Usando un icono nativo seguro
                 .build()
 
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
@@ -158,6 +151,7 @@ class TradingScannerService : Service() {
                 val json = response.body?.string() ?: return
                 val klines = JsonParser.parseString(json).asJsonArray
 
+                // TU CÓDIGO ORIGINAL QUE COMPILA PERFECTO
                 val velas = mutableListOf<org.ta4j.core.Bar>()
 
                 for (elem in klines) {
@@ -232,6 +226,7 @@ class TradingScannerService : Service() {
                     val beginTime = endTime.minus(duracion)
                     val serie = mercado[symbol] ?: return
 
+                    // TU CÓDIGO ORIGINAL QUE COMPILA PERFECTO
                     val vela = org.ta4j.core.BaseBar(
                         duracion,
                         beginTime,
@@ -276,7 +271,6 @@ class TradingScannerService : Service() {
         }
 
         val tiempoActual = System.currentTimeMillis()
-        // Caché: Solo consultamos la API cada 30 segundos (evita bloqueos de Binance)
         if (tiempoActual - ultimaVezSaldoActualizado < 30_000L && ultimoSaldoCache > 0.0) {
             return ultimoSaldoCache
         }
@@ -327,6 +321,30 @@ class TradingScannerService : Service() {
         sendBroadcast(intent)
     }
 
+    // --- CÁLCULO MANUAL DE BOLLINGER BANDS (EVITA CRASHEO DE BIGDECIMAL) ---
+    private fun calcularBollingerBandsManual(series: BarSeries, index: Int): Triple<Double, Double, Double> {
+        val period = 20
+        if (index < period - 1) return Triple(0.0, 0.0, 0.0)
+
+        var sum = 0.0
+        for (i in 0 until period) {
+            sum += series.getBar(index - i).closePrice.doubleValue()
+        }
+        val sma = sum / period
+
+        var varianceSum = 0.0
+        for (i in 0 until period) {
+            val diff = series.getBar(index - i).closePrice.doubleValue() - sma
+            varianceSum += diff * diff
+        }
+        val sd = kotlin.math.sqrt(varianceSum / period)
+
+        val upper = sma + (2.0 * sd)
+        val lower = sma - (2.0 * sd)
+
+        return Triple(sma, upper, lower)
+    }
+
     private fun calcularIndicadores(symbol: String, series: BarSeries) {
         if (series.barCount < 50) return
 
@@ -339,12 +357,9 @@ class TradingScannerService : Service() {
         val ema200 = EMAIndicator(closePrice, 200)
         val atr = ATRIndicator(series, 14)
 
-        val sma20 = SMAIndicator(closePrice, 20)
-        val sd20 = StandardDeviationIndicator(closePrice, 20)
-        val bbMiddle = BollingerBandsMiddleIndicator(sma20)
-
-        val bbUpper = BollingerBandsUpperIndicator(bbMiddle, sd20, DoubleNum.valueOf(2.0))
-        val bbLower = BollingerBandsLowerIndicator(bbMiddle, sd20, DoubleNum.valueOf(2.0))
+        // Usamos el cálculo manual que puentea el error de la librería
+        val (_, valorBbUpper, valorBbLower) = calcularBollingerBandsManual(series, ultima)
+        val (_, bbUpperPrevio, bbLowerPrevio) = calcularBollingerBandsManual(series, previa)
 
         val precioActual = closePrice.getValue(ultima).doubleValue()
         val precioApertura = series.getBar(ultima).openPrice.doubleValue()
@@ -353,8 +368,6 @@ class TradingScannerService : Service() {
 
         val valorEma9 = ema9.getValue(ultima).doubleValue()
         val valorEma200 = ema200.getValue(ultima).doubleValue()
-        val valorBbLower = bbLower.getValue(ultima).doubleValue()
-        val valorBbUpper = bbUpper.getValue(ultima).doubleValue()
         val valorAtr = atr.getValue(ultima).doubleValue()
 
         val atrP = if (precioActual > 0) (valorAtr / precioActual) * 100 else 0.0
@@ -363,8 +376,6 @@ class TradingScannerService : Service() {
         val minPrevio = series.getBar(previa).lowPrice.doubleValue()
         val maxPrevio = series.getBar(previa).highPrice.doubleValue()
         val ema9Previa = ema9.getValue(previa).doubleValue()
-        val bbLowerPrevio = bbLower.getValue(previa).doubleValue()
-        val bbUpperPrevio = bbUpper.getValue(previa).doubleValue()
 
         val velaVerde = precioActual > precioApertura
         val velaRoja = precioActual < precioApertura
@@ -395,7 +406,6 @@ class TradingScannerService : Service() {
                 val apalancamiento = prefs.getFloat(PrefKeys.APALANCAMIENTO, 20.0f).toDouble()
                 val perdidaMaxPct = prefs.getFloat(PrefKeys.PERDIDA_MAX_PCT, 5.0f) / 100.0
                 val roiMinimo = prefs.getFloat(PrefKeys.ROI_MINIMO, 5.0f).toDouble()
-                val tipoMargen = prefs.getString(PrefKeys.TIPO_MARGEN, "ISOLATED") ?: "ISOLATED"
 
                 val margenPorOperacion = billeteraReal * tamanoPosPct
                 val tamanoPosicionReal = margenPorOperacion * apalancamiento
@@ -420,32 +430,24 @@ class TradingScannerService : Service() {
                         razonRechazo = "RECHAZADO - MERCADO PLANO"
                         senal = "NEUTRAL"
                     } else if (roi < roiMinimo) {
-                        razonRechazo = String.format(Locale.US, "RECHAZADO - ROI %.2f%% < Mínimo %.2f%%", roi, roiMinimo)
+                        razonRechazo = "RECHAZADO - ROI MENOR AL MÍNIMO"
                         senal = "NEUTRAL"
                     } else {
                         razonRechazo = "APROBADO ✅"
                         ultimaAlertaPorToken[symbol] = tiempoActual
-                        val horaExacta = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date(tiempoActual))
-                        val pnlInfoStr = "PNL: $${String.format(Locale.US, "%.2f", pnlNeto)} USDT"
 
-                        val cuerpoPush = """
-                            ⚡ APALANCAMIENTO: ${apalancamiento.toInt()}x ($tipoMargen)
-                            💵 ENTRADA: ${String.format(Locale.US, "%.4f", precioActual)}
-                            ✅ TP: ${String.format(Locale.US, "%.4f", tp)}
-                            ❌ SL: ${String.format(Locale.US, "%.4f", sl)}
-                            💰 MARGEN: $${String.format(Locale.US, "%.2f", margenPorOperacion)} USDT
-                            🔥 ROI EST: ${String.format(Locale.US, "%.2f%%", roi)}
-                        """.trimIndent()
+                        // ENVÍO ESTRUCTURADO PARA LA UI DE TARJETAS
+                        val alertaIntent = Intent("NUEVA_ALERTA_DETALLADA")
+                        alertaIntent.setPackage(packageName)
+                        alertaIntent.putExtra("token", symbol)
+                        alertaIntent.putExtra("direction", senal)
+                        alertaIntent.putExtra("entry", precioActual)
+                        alertaIntent.putExtra("tp", tp)
+                        alertaIntent.putExtra("sl", sl)
+                        alertaIntent.putExtra("margin", margenPorOperacion)
+                        alertaIntent.putExtra("roi", roi)
 
-                        val intent = Intent("NUEVA_ALERTA")
-                        intent.setPackage(packageName)
-                        intent.putExtra("token", symbol)
-                        intent.putExtra("senal", senal)
-                        intent.putExtra("hora", horaExacta)
-                        intent.putExtra("pnl_info", pnlInfoStr)
-                        intent.putExtra("cuerpo", cuerpoPush)
-                        sendBroadcast(intent)
-
+                        sendBroadcast(alertaIntent)
                         hacerVibrar(senal)
                     }
                 }
