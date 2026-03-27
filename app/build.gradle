@@ -62,6 +62,7 @@ dependencies {
     // Trading Indicators (ta4j)
     implementation 'org.ta4j:ta4j-core:0.22.4'
 
+
     // Networking & JSON
     implementation 'com.squareup.okhttp3:okhttp:4.12.0'
     implementation 'com.google.code.gson:gson:2.11.0'

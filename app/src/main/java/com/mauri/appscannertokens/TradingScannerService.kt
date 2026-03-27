@@ -151,12 +151,8 @@ class TradingScannerService : Service() {
                 val json = response.body?.string() ?: return
                 val klines = JsonParser.parseString(json).asJsonArray
 
-                // 🔥 SOLUCIÓN: Pasamos la clase de Java directamente. 100% compatible con Kotlin
-                val serie = BaseBarSeriesBuilder()
-                    .withName(symbol)
-                    .withMaxBarCount(250)
-                    .withNumTypeOf(DoubleNum::class.java)
-                    .build()
+                // 🔥 SOLUCIÓN: Creamos una lista temporal para guardar las velas
+                val velas = mutableListOf<org.ta4j.core.Bar>()
 
                 for (elem in klines) {
                     val k = elem.asJsonArray
@@ -171,7 +167,8 @@ class TradingScannerService : Service() {
                     val endTime = Instant.ofEpochMilli(closeTime)
                     val beginTime = endTime.minus(duracion)
 
-                    serie.addBar(
+                    // Agregamos la vela formateada con DoubleNum a la lista
+                    velas.add(
                         org.ta4j.core.BaseBar(
                             duracion,
                             beginTime,
@@ -186,6 +183,15 @@ class TradingScannerService : Service() {
                         )
                     )
                 }
+
+                // Le entregamos la lista a la caja constructora.
+                // Automáticamente adopta el sistema DoubleNum y esquiva el error de Android 14.
+                val serie = BaseBarSeriesBuilder()
+                    .withName(symbol)
+                    .withMaxBarCount(250)
+                    .withBars(velas)
+                    .build()
+
                 mercado[symbol] = serie
             }
         } catch (e: Exception) {
@@ -420,7 +426,7 @@ class TradingScannerService : Service() {
             │ 📉 EMA 200: ${String.format(Locale.US, "%.4f", valorEma200)}
             │ 📏 ATR (%): ${String.format(Locale.US, "%.3f%%", atrP)}
             │ 🎯 SEÑAL: $senalPrevia
-            │ 🛡️ ESTADO: ${if (razonRechazo.isEmpty()) "ESPERANDO" else razonRechazo}
+            │ 🛡️ ESTADO: ${razonRechazo.ifEmpty { "ESPERANDO" }}
             ╰────────────────────────────────────────╯
         """.trimIndent()
 
@@ -428,18 +434,13 @@ class TradingScannerService : Service() {
     }
 
     private fun hacerVibrar(senal: String) {
-        val vibrator = getSystemService(Context.VIBRATOR_SERVICE) as Vibrator
+        val vibrator = getSystemService(VIBRATOR_SERVICE) as Vibrator
         if (vibrator.hasVibrator()) {
             val patronLong = longArrayOf(0, 150, 100, 150)
             val patronShort = longArrayOf(0, 600)
             val patron = if (senal == "LONG") patronLong else patronShort
 
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                vibrator.vibrate(VibrationEffect.createWaveform(patron, -1))
-            } else {
-                @Suppress("DEPRECATION")
-                vibrator.vibrate(patron, -1)
-            }
+            vibrator.vibrate(VibrationEffect.createWaveform(patron, -1))
         }
     }
 
@@ -459,10 +460,8 @@ class TradingScannerService : Service() {
     }
 
     private fun crearCanalNotificacion() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val serviceChannel = NotificationChannel(CHANNEL_ID, "Escáner Nativo", NotificationManager.IMPORTANCE_LOW)
-            getSystemService(NotificationManager::class.java)?.createNotificationChannel(serviceChannel)
-        }
+        val serviceChannel = NotificationChannel(CHANNEL_ID, "Escáner Nativo", NotificationManager.IMPORTANCE_LOW)
+        getSystemService(NotificationManager::class.java)?.createNotificationChannel(serviceChannel)
     }
 
     private fun cuandoTimeframeADuration(tf: String): Duration = when(tf) {
