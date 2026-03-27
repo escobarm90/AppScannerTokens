@@ -22,16 +22,32 @@ import org.ta4j.core.BaseBarSeriesBuilder
 import org.ta4j.core.indicators.ATRIndicator
 import org.ta4j.core.indicators.RSIIndicator
 import org.ta4j.core.indicators.averages.EMAIndicator
+import org.ta4j.core.indicators.averages.SMAIndicator
+import org.ta4j.core.indicators.bollinger.BollingerBandsLowerIndicator
+import org.ta4j.core.indicators.bollinger.BollingerBandsMiddleIndicator
+import org.ta4j.core.indicators.bollinger.BollingerBandsUpperIndicator
 import org.ta4j.core.indicators.helpers.ClosePriceIndicator
+import org.ta4j.core.indicators.helpers.VolumeIndicator
+import org.ta4j.core.indicators.statistics.StandardDeviationIndicator
 import org.ta4j.core.num.DoubleNum
 import java.nio.charset.StandardCharsets
+import java.text.SimpleDateFormat
 import java.time.Duration
 import java.time.Instant
+import java.util.Date
 import java.util.Locale
 import java.util.concurrent.ConcurrentHashMap
 import javax.crypto.Mac
 import javax.crypto.spec.SecretKeySpec
 import kotlin.math.abs
+
+// Estructura para almacenar temporalmente los datos del Order Flow
+data class OrderFlowData(
+    val spread: Double,
+    val bidQty: Double,
+    val askQty: Double,
+    val pctCompras: Double
+)
 
 class TradingScannerService : Service() {
 
@@ -39,6 +55,8 @@ class TradingScannerService : Service() {
         private const val CHANNEL_ID = "ScannerServiceChannel"
         private const val TOP_VOLATILES = 50
         private const val VOLUMEN_MIN_24H = 15000000.0
+        private const val SPREAD_MAXIMO = 0.15
+        private const val VOL_RATIO_MINIMO = 1.0
     }
 
     private val prefs by lazy { getSharedPreferences(PrefKeys.PREFS_NAME, Context.MODE_PRIVATE) }
@@ -65,8 +83,8 @@ class TradingScannerService : Service() {
         try {
             val notification = NotificationCompat.Builder(this, CHANNEL_ID)
                 .setContentTitle("Motor Scanner Activo")
-                .setContentText("Monitoreando pares en vivo...")
-                .setSmallIcon(android.R.drawable.ic_menu_compass) // Usando un icono nativo seguro
+                .setContentText("Analizando Microestructura de Mercado...")
+                .setSmallIcon(R.mipmap.ic_launcher)
                 .build()
 
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
@@ -94,7 +112,7 @@ class TradingScannerService : Service() {
 
         Thread {
             try {
-                enviarDebug("🚀 Iniciando Motor REST (Temporalidad: $tframe)...")
+                enviarDebug("🚀 Iniciando Motor (Temporalidad: $tframe)...")
                 val topPares = obtenerTopPares()
                 enviarDebug("✅ Top ${topPares.size} pares filtrados. Descargando historial...")
 
@@ -103,9 +121,7 @@ class TradingScannerService : Service() {
                     Thread.sleep(50)
                 }
 
-                enviarDebug("✅ 250 velas descargadas por par.")
-                enviarDebug("🔌 Conectando WebSockets en vivo...")
-
+                enviarDebug("✅ Historial descargado. Conectando WebSockets en vivo...")
                 iniciarWebsocketMultiplex(topPares, tframe, duracion)
 
             } catch (e: Exception) {
@@ -128,11 +144,18 @@ class TradingScannerService : Service() {
                     val symbol = t.get("symbol").asString
                     val volume = t.get("quoteVolume").asDouble
 
-                    if (symbol.endsWith("USDT") && volume > VOLUMEN_MIN_24H) {
+                    // Ignoramos BTC, ETH y Stablecoins
+                    if (symbol.endsWith("USDT") &&
+                        !symbol.contains("BTCUSDT") &&
+                        !symbol.contains("ETHUSDT") &&
+                        !symbol.contains("USDCUSDT") &&
+                        !symbol.contains("FDUSDUSDT") &&
+                        volume > VOLUMEN_MIN_24H) {
                         validTickers.add(t)
                     }
                 }
 
+                // Ordenar por volatilidad de 24h y agarrar los top 50
                 validTickers.sortByDescending { abs(it.get("priceChangePercent").asDouble) }
                 validTickers.take(TOP_VOLATILES).map { it.get("symbol").asString }
             }
@@ -151,13 +174,11 @@ class TradingScannerService : Service() {
                 val json = response.body?.string() ?: return
                 val klines = JsonParser.parseString(json).asJsonArray
 
-                // TU CÓDIGO ORIGINAL QUE COMPILA PERFECTO
                 val velas = mutableListOf<org.ta4j.core.Bar>()
 
                 for (elem in klines) {
                     val k = elem.asJsonArray
                     val closeTime = k.get(6).asLong
-
                     val open = k.get(1).asDouble
                     val high = k.get(2).asDouble
                     val low = k.get(3).asDouble
@@ -169,26 +190,14 @@ class TradingScannerService : Service() {
 
                     velas.add(
                         org.ta4j.core.BaseBar(
-                            duracion,
-                            beginTime,
-                            endTime,
-                            DoubleNum.valueOf(open),
-                            DoubleNum.valueOf(high),
-                            DoubleNum.valueOf(low),
-                            DoubleNum.valueOf(close),
-                            DoubleNum.valueOf(vol),
-                            DoubleNum.valueOf(0.0),
-                            0L
+                            duracion, beginTime, endTime,
+                            DoubleNum.valueOf(open), DoubleNum.valueOf(high), DoubleNum.valueOf(low),
+                            DoubleNum.valueOf(close), DoubleNum.valueOf(vol), DoubleNum.valueOf(0.0), 0L
                         )
                     )
                 }
 
-                val serie = BaseBarSeriesBuilder()
-                    .withName(symbol)
-                    .withMaxBarCount(250)
-                    .withBars(velas)
-                    .build()
-
+                val serie = BaseBarSeriesBuilder().withName(symbol).withMaxBarCount(250).withBars(velas).build()
                 mercado[symbol] = serie
             }
         } catch (e: Exception) {
@@ -215,7 +224,6 @@ class TradingScannerService : Service() {
                     if (!mercado.containsKey(symbol)) return
 
                     val closeTime = kline.get("T").asLong
-
                     val open = kline.get("o").asDouble
                     val high = kline.get("h").asDouble
                     val low = kline.get("l").asDouble
@@ -226,18 +234,10 @@ class TradingScannerService : Service() {
                     val beginTime = endTime.minus(duracion)
                     val serie = mercado[symbol] ?: return
 
-                    // TU CÓDIGO ORIGINAL QUE COMPILA PERFECTO
                     val vela = org.ta4j.core.BaseBar(
-                        duracion,
-                        beginTime,
-                        endTime,
-                        DoubleNum.valueOf(open),
-                        DoubleNum.valueOf(high),
-                        DoubleNum.valueOf(low),
-                        DoubleNum.valueOf(close),
-                        DoubleNum.valueOf(vol),
-                        DoubleNum.valueOf(0.0),
-                        0L
+                        duracion, beginTime, endTime,
+                        DoubleNum.valueOf(open), DoubleNum.valueOf(high), DoubleNum.valueOf(low),
+                        DoubleNum.valueOf(close), DoubleNum.valueOf(vol), DoubleNum.valueOf(0.0), 0L
                     )
 
                     if (serie.barCount > 0 && serie.lastBar.endTime == endTime) {
@@ -246,7 +246,7 @@ class TradingScannerService : Service() {
                         serie.addBar(vela, false)
                     }
 
-                    calcularIndicadores(symbol, serie)
+                    analizarOportunidad(symbol, serie)
                 } catch (e: Exception) {
                     enviarDebug("⚠️ Error procesando WS: ${e.message}")
                 }
@@ -258,6 +258,50 @@ class TradingScannerService : Service() {
                 if (isScanning) iniciarMotorBinance()
             }
         })
+    }
+
+    private fun calcularOrderFlow(symbol: String): OrderFlowData? {
+        try {
+            // L2 Orderbook - Profundidad
+            val reqOb = Request.Builder().url("https://fapi.binance.com/fapi/v1/depth?symbol=$symbol&limit=5").build()
+            val resOb = client.newCall(reqOb).execute()
+            if (!resOb.isSuccessful) return null
+            val jsonOb = JsonParser.parseString(resOb.body?.string()).asJsonObject
+
+            val bids = jsonOb.getAsJsonArray("bids")
+            val asks = jsonOb.getAsJsonArray("asks")
+
+            var bidQty = 0.0
+            for (i in 0 until bids.size()) bidQty += bids.get(i).asJsonArray.get(1).asDouble
+
+            var askQty = 0.0
+            for (i in 0 until asks.size()) askQty += asks.get(i).asJsonArray.get(1).asDouble
+
+            val bestBid = bids.get(0).asJsonArray.get(0).asDouble
+            val bestAsk = asks.get(0).asJsonArray.get(0).asDouble
+            val spread = if (bestBid > 0) ((bestAsk - bestBid) / bestBid) * 100 else 99.0
+
+            // Flujo de Trades Recientes (Tape Reading)
+            val reqTrades = Request.Builder().url("https://fapi.binance.com/fapi/v1/trades?symbol=$symbol&limit=20").build()
+            val resTrades = client.newCall(reqTrades).execute()
+            if (!resTrades.isSuccessful) return null
+            val jsonTrades = JsonParser.parseString(resTrades.body?.string()).asJsonArray
+
+            var volCompras = 0.0
+            var volTotal = 0.0
+            for (i in 0 until jsonTrades.size()) {
+                val trade = jsonTrades.get(i).asJsonObject
+                val qty = trade.get("qty").asDouble
+                val isBuyerMaker = trade.get("isBuyerMaker").asBoolean
+                volTotal += qty
+                if (!isBuyerMaker) volCompras += qty // Comprador Taker (agresivo)
+            }
+            val pctCompras = if (volTotal > 0) (volCompras / volTotal) * 100 else 50.0
+
+            return OrderFlowData(spread, bidQty, askQty, pctCompras)
+        } catch (e: Exception) {
+            return null
+        }
     }
 
     private fun obtenerSaldoBilleteraUSDT(): Double {
@@ -277,7 +321,6 @@ class TradingScannerService : Service() {
 
         return try {
             val queryString = "timestamp=$tiempoActual"
-
             val sha256HMAC = Mac.getInstance("HmacSHA256")
             val secretKeySpec = SecretKeySpec(secretKey.trim().toByteArray(StandardCharsets.UTF_8), "HmacSHA256")
             sha256HMAC.init(secretKeySpec)
@@ -285,10 +328,7 @@ class TradingScannerService : Service() {
             val signature = hash.joinToString("") { "%02x".format(it) }
 
             val url = "https://fapi.binance.com/fapi/v2/balance?$queryString&signature=$signature"
-            val request = Request.Builder()
-                .url(url)
-                .addHeader("X-MBX-APIKEY", apiKey.trim())
-                .build()
+            val request = Request.Builder().url(url).addHeader("X-MBX-APIKEY", apiKey.trim()).build()
 
             client.newCall(request).execute().use { response ->
                 if (response.isSuccessful && response.body != null) {
@@ -308,7 +348,6 @@ class TradingScannerService : Service() {
             enviarSaldoAMainActivity(saldoManual)
             saldoManual
         } catch (e: Exception) {
-            enviarDebug("⚠️ Error API Binance: ${e.message}. Usando manual.")
             enviarSaldoAMainActivity(saldoManual)
             saldoManual
         }
@@ -321,31 +360,7 @@ class TradingScannerService : Service() {
         sendBroadcast(intent)
     }
 
-    // --- CÁLCULO MANUAL DE BOLLINGER BANDS (EVITA CRASHEO DE BIGDECIMAL) ---
-    private fun calcularBollingerBandsManual(series: BarSeries, index: Int): Triple<Double, Double, Double> {
-        val period = 20
-        if (index < period - 1) return Triple(0.0, 0.0, 0.0)
-
-        var sum = 0.0
-        for (i in 0 until period) {
-            sum += series.getBar(index - i).closePrice.doubleValue()
-        }
-        val sma = sum / period
-
-        var varianceSum = 0.0
-        for (i in 0 until period) {
-            val diff = series.getBar(index - i).closePrice.doubleValue() - sma
-            varianceSum += diff * diff
-        }
-        val sd = kotlin.math.sqrt(varianceSum / period)
-
-        val upper = sma + (2.0 * sd)
-        val lower = sma - (2.0 * sd)
-
-        return Triple(sma, upper, lower)
-    }
-
-    private fun calcularIndicadores(symbol: String, series: BarSeries) {
+    private fun analizarOportunidad(symbol: String, series: BarSeries) {
         if (series.barCount < 50) return
 
         val ultima = series.endIndex
@@ -353,117 +368,169 @@ class TradingScannerService : Service() {
 
         val closePrice = ClosePriceIndicator(series)
         val rsi = RSIIndicator(closePrice, 14)
-        val ema9 = EMAIndicator(closePrice, 9)
+        val ema7 = EMAIndicator(closePrice, 7)
         val ema200 = EMAIndicator(closePrice, 200)
         val atr = ATRIndicator(series, 14)
 
-        // Usamos el cálculo manual que puentea el error de la librería
-        val (_, valorBbUpper, valorBbLower) = calcularBollingerBandsManual(series, ultima)
-        val (_, bbUpperPrevio, bbLowerPrevio) = calcularBollingerBandsManual(series, previa)
+        val volumenInd = VolumeIndicator(series)
+        val volSma = SMAIndicator(volumenInd, 20)
+
+        val sma20 = SMAIndicator(closePrice, 20)
+        val sd20 = StandardDeviationIndicator(closePrice, 20)
+        val bbMiddle = BollingerBandsMiddleIndicator(sma20)
+
+        val bbUpper = BollingerBandsUpperIndicator(bbMiddle, sd20, DoubleNum.valueOf(2.0))
+        val bbLower = BollingerBandsLowerIndicator(bbMiddle, sd20, DoubleNum.valueOf(2.0))
 
         val precioActual = closePrice.getValue(ultima).doubleValue()
         val precioApertura = series.getBar(ultima).openPrice.doubleValue()
         val precioMinimo = series.getBar(ultima).lowPrice.doubleValue()
         val precioMaximo = series.getBar(ultima).highPrice.doubleValue()
+        val volumenActual = volumenInd.getValue(ultima).doubleValue()
+        val volPromedio = volSma.getValue(ultima).doubleValue()
 
-        val valorEma9 = ema9.getValue(ultima).doubleValue()
         val valorEma200 = ema200.getValue(ultima).doubleValue()
+        val valorEma7 = ema7.getValue(ultima).doubleValue()
+        val ema7Previa = ema7.getValue(previa).doubleValue()
+        val valorBbLower = bbLower.getValue(ultima).doubleValue()
+        val valorBbUpper = bbUpper.getValue(ultima).doubleValue()
         val valorAtr = atr.getValue(ultima).doubleValue()
 
+        // 1. Análisis de Volatilidad Relativa
         val atrP = if (precioActual > 0) (valorAtr / precioActual) * 100 else 0.0
+        val volRatio = if (volPromedio > 0) volumenActual / volPromedio else 0.0
 
         val cierrePrevio = closePrice.getValue(previa).doubleValue()
         val minPrevio = series.getBar(previa).lowPrice.doubleValue()
         val maxPrevio = series.getBar(previa).highPrice.doubleValue()
-        val ema9Previa = ema9.getValue(previa).doubleValue()
+        val bbLowerPrevio = bbLower.getValue(previa).doubleValue()
+        val bbUpperPrevio = bbUpper.getValue(previa).doubleValue()
 
         val velaVerde = precioActual > precioApertura
         val velaRoja = precioActual < precioApertura
 
+        // 2. Patrones Técnicos Reversión a la Media
         val toqueBbInf = (minPrevio <= bbLowerPrevio) || (precioMinimo <= valorBbLower)
-        val recuperaEma9 = (precioActual > valorEma9) && (cierrePrevio <= ema9Previa)
+        val recuperaEma7 = (cierrePrevio < ema7Previa) && (precioActual > valorEma7)
 
-        val zonaBbUpper = (maxPrevio >= bbUpperPrevio) || (precioMaximo >= valorBbUpper)
-        val pierdeEma9 = (precioActual < valorEma9) && (cierrePrevio >= ema9Previa)
+        val toqueBbSup = (maxPrevio >= bbUpperPrevio) || (precioMaximo >= valorBbUpper)
+        val pierdeEma7 = (cierrePrevio > ema7Previa) && (precioActual < valorEma7)
 
-        var senal = "NEUTRAL"
-        if (toqueBbInf && recuperaEma9 && velaVerde) senal = "LONG"
-        else if (zonaBbUpper && pierdeEma9 && velaRoja) senal = "SHORT"
+        var senalTecnica = "NEUTRAL"
+        if (toqueBbInf && recuperaEma7 && velaVerde) senalTecnica = "LONG"
+        else if (toqueBbSup && pierdeEma7 && velaRoja) senalTecnica = "SHORT"
 
-        val senalPrevia = senal
+        // 3. Variables de Riesgo del Usuario (Actualizadas en tiempo real)
+        val billeteraReal = obtenerSaldoBilleteraUSDT()
+        val P = prefs.getFloat(PrefKeys.TAMANO_POS_PCT, 10.0f) / 100.0 // Margen
+        val L = prefs.getFloat(PrefKeys.APALANCAMIENTO, 20.0f).toDouble() // Leverage
+        val R = prefs.getFloat(PrefKeys.PERDIDA_MAX_PCT, 2.0f) / 100.0 // Stop Loss Riesgo Total
+        val roiMinimo = prefs.getFloat(PrefKeys.ROI_MINIMO, 5.0f).toDouble()
+        val tipoMargen = prefs.getString(PrefKeys.TIPO_MARGEN, "ISOLATED") ?: "ISOLATED"
+        val RR = 2.0 // Ratio Riesgo Beneficio (Fijo para TP matemático)
+
+        val margenPorOperacion = billeteraReal * P
+
+        // Cálculo del ATR Mínimo necesario matemáticamente para alcanzar el ROI esperado
+        val atrMinimoRequerido = (roiMinimo + (L * 0.1)) / (L * 2.0)
+
         var razonRechazo = ""
+        var infoOrderFlow = "No evaluado (Sin señal)"
 
-        if (senal != "NEUTRAL") {
+        if (senalTecnica != "NEUTRAL") {
             val tiempoActual = System.currentTimeMillis()
             val tiempoUltima = ultimaAlertaPorToken[symbol] ?: 0L
 
             if ((tiempoActual - tiempoUltima) < 60_000L) {
                 razonRechazo = "RECHAZADO - EN COOLDOWN (1 MIN)"
-                senal = "NEUTRAL"
+            } else if (volRatio <= VOL_RATIO_MINIMO) {
+                razonRechazo = String.format(Locale.US, "RECHAZADO - VOLUMEN %.2fx <= %.2fx", volRatio, VOL_RATIO_MINIMO)
+            } else if (atrP < atrMinimoRequerido) {
+                razonRechazo = String.format(Locale.US, "RECHAZADO - MERCADO PLANO (ATR: %.2f%% < Req: %.2f%%)", atrP, atrMinimoRequerido)
             } else {
-                val billeteraReal = obtenerSaldoBilleteraUSDT()
-                val tamanoPosPct = prefs.getFloat(PrefKeys.TAMANO_POS_PCT, 30.0f) / 100.0
-                val apalancamiento = prefs.getFloat(PrefKeys.APALANCAMIENTO, 20.0f).toDouble()
-                val perdidaMaxPct = prefs.getFloat(PrefKeys.PERDIDA_MAX_PCT, 5.0f) / 100.0
-                val roiMinimo = prefs.getFloat(PrefKeys.ROI_MINIMO, 5.0f).toDouble()
+                // 4. Confirmación por Order Flow y Liquidez
+                val orderFlow = calcularOrderFlow(symbol)
 
-                val margenPorOperacion = billeteraReal * tamanoPosPct
-                val tamanoPosicionReal = margenPorOperacion * apalancamiento
+                if (orderFlow == null) {
+                    razonRechazo = "RECHAZADO - ERROR LECTURA API BINANCE"
+                } else {
+                    infoOrderFlow = String.format(Locale.US, "Bid: %.1f / Ask: %.1f | Fuerza Compra: %.1f%%", orderFlow.bidQty, orderFlow.askQty, orderFlow.pctCompras)
 
-                if (precioActual > 0) {
-                    val cantidadTokens = tamanoPosicionReal / precioActual
-                    val perdidaMaximaUSDT = billeteraReal * perdidaMaxPct
-                    val distSl = if (cantidadTokens > 0) perdidaMaximaUSDT / cantidadTokens else 0.0
-                    val distTp = valorAtr * 2.0
-
-                    val tp = if (senal == "LONG") precioActual + distTp else precioActual - distTp
-                    val sl = if (senal == "LONG") precioActual - distSl else precioActual + distSl
-
-                    val gananciaBrutaUSDT = cantidadTokens * distTp
-                    val feeEntrada = tamanoPosicionReal * 0.0005
-                    val feeSalida = (cantidadTokens * tp) * 0.0005
-                    val pnlNeto = gananciaBrutaUSDT - (feeEntrada + feeSalida)
-
-                    val roi = if (margenPorOperacion > 0) (pnlNeto / margenPorOperacion) * 100 else 0.0
-
-                    if (atrP < 0.12) {
-                        razonRechazo = "RECHAZADO - MERCADO PLANO"
-                        senal = "NEUTRAL"
-                    } else if (roi < roiMinimo) {
-                        razonRechazo = "RECHAZADO - ROI MENOR AL MÍNIMO"
-                        senal = "NEUTRAL"
+                    if (orderFlow.spread > SPREAD_MAXIMO) {
+                        razonRechazo = String.format(Locale.US, "RECHAZADO - SPREAD ALTO (%.3f%% > %.2f%%)", orderFlow.spread, SPREAD_MAXIMO)
+                    } else if (senalTecnica == "LONG" && orderFlow.pctCompras < 45.0) {
+                        razonRechazo = String.format(Locale.US, "RECHAZADO LONG - FALTAN COMPRADORES (%.1f%% < 45%%)", orderFlow.pctCompras)
+                    } else if (senalTecnica == "SHORT" && orderFlow.pctCompras > 55.0) {
+                        razonRechazo = String.format(Locale.US, "RECHAZADO SHORT - FALTAN VENDEDORES (%.1f%% > 55%%)", orderFlow.pctCompras)
                     } else {
+                        // 5. Aprobación y Aplicación Estricta de Fórmulas Matemáticas
                         razonRechazo = "APROBADO ✅"
                         ultimaAlertaPorToken[symbol] = tiempoActual
+                        val horaExacta = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date(tiempoActual))
 
-                        // ENVÍO ESTRUCTURADO PARA LA UI DE TARJETAS
-                        val alertaIntent = Intent("NUEVA_ALERTA_DETALLADA")
-                        alertaIntent.setPackage(packageName)
-                        alertaIntent.putExtra("token", symbol)
-                        alertaIntent.putExtra("direction", senal)
-                        alertaIntent.putExtra("entry", precioActual)
-                        alertaIntent.putExtra("tp", tp)
-                        alertaIntent.putExtra("sl", sl)
-                        alertaIntent.putExtra("margin", margenPorOperacion)
-                        alertaIntent.putExtra("roi", roi)
+                        val PE = precioActual
+                        val sl: Double
+                        val tp: Double
 
-                        sendBroadcast(alertaIntent)
-                        hacerVibrar(senal)
+                        // FÓRMULA DE RIESGO: Adaptada a LONG y SHORT
+                        if (senalTecnica == "LONG") {
+                            sl = PE * (1.0 - (R / (P * L)))
+                            tp = PE + (PE - sl) * RR
+                        } else {
+                            sl = PE * (1.0 + (R / (P * L)))
+                            tp = PE - (sl - PE) * RR
+                        }
+
+                        val distTp = abs(tp - PE)
+                        val tamanoPosicionReal = margenPorOperacion * L
+                        val cantidadTokens = tamanoPosicionReal / PE
+
+                        val gananciaBrutaUSDT = cantidadTokens * distTp
+                        val feeEntrada = tamanoPosicionReal * 0.0005
+                        val feeSalida = (cantidadTokens * tp) * 0.0005
+                        val pnlNeto = gananciaBrutaUSDT - (feeEntrada + feeSalida)
+                        val roi = if (margenPorOperacion > 0) (pnlNeto / margenPorOperacion) * 100 else 0.0
+
+                        val pnlInfoStr = "PNL: $${String.format(Locale.US, "%.2f", pnlNeto)} USDT"
+
+                        val cuerpoPush = """
+                            ⚡ APALANCAMIENTO: ${L.toInt()}x ($tipoMargen)
+                            💵 ENTRADA: ${String.format(Locale.US, "%.4f", PE)}
+                            ✅ TP: ${String.format(Locale.US, "%.4f", tp)}
+                            ❌ SL: ${String.format(Locale.US, "%.4f", sl)}
+                            💰 MARGEN: $${String.format(Locale.US, "%.2f", margenPorOperacion)} USDT
+                            🔥 ROI EST: ${String.format(Locale.US, "%.2f%%", roi)}
+                        """.trimIndent()
+
+                        val intent = Intent("NUEVA_ALERTA")
+                        intent.setPackage(packageName)
+                        intent.putExtra("token", symbol)
+                        intent.putExtra("senal", senalTecnica)
+                        intent.putExtra("hora", horaExacta)
+                        intent.putExtra("pnl_info", pnlInfoStr)
+                        intent.putExtra("cuerpo", cuerpoPush)
+                        sendBroadcast(intent)
+
+                        hacerVibrar(senalTecnica)
                     }
                 }
             }
         }
 
+        // Formato vertical estricto para el Cmd Scanner
         val debugMsj = """
             ╭────────────────────────────────────────╮
             │ 🪙 TOKEN: $symbol (USDT)
-            │ 💵 PRECIO: ${String.format(Locale.US, "%.4f", precioActual)}
+            │ 💵 PRECIO ACTUAL: ${String.format(Locale.US, "%.6f", precioActual)}
             │ 📊 RSI (14): ${String.format(Locale.US, "%.2f", rsi.getValue(ultima).doubleValue())}
-            │ 📈 EMA 9: ${String.format(Locale.US, "%.4f", valorEma9)}
-            │ 📉 EMA 200: ${String.format(Locale.US, "%.4f", valorEma200)}
-            │ 📏 ATR (%): ${String.format(Locale.US, "%.3f%%", atrP)}
-            │ 🎯 SEÑAL: $senalPrevia
-            │ 🛡️ ESTADO: ${if (razonRechazo.isEmpty()) "ESPERANDO" else razonRechazo}
+            │ 📈 EMA 7: ${String.format(Locale.US, "%.6f", valorEma7)}
+            │ 📉 EMA 200: ${String.format(Locale.US, "%.6f", valorEma200)}
+            │ 📏 ATR (%): ${String.format(Locale.US, "%.3f%%", atrP)} (Mín Req: ${String.format(Locale.US, "%.3f%%", atrMinimoRequerido)})
+            │ 🎢 BB L/U: ${String.format(Locale.US, "%.6f", valorBbLower)} / ${String.format(Locale.US, "%.6f", valorBbUpper)}
+            │ 🌊 VOL RATIO: ${String.format(Locale.US, "%.2fx", volRatio)}
+            │ 🚀 ORDER FLOW: $infoOrderFlow
+            │ 🎯 SEÑAL TÉCNICA: $senalTecnica
+            │ 🛡️ ESTADO: ${if (razonRechazo.isEmpty()) "ESPERANDO CONFIRMACIÓN" else razonRechazo}
             ╰────────────────────────────────────────╯
         """.trimIndent()
 
@@ -514,9 +581,6 @@ class TradingScannerService : Service() {
         "5m" -> Duration.ofMinutes(5)
         "15m" -> Duration.ofMinutes(15)
         "30m" -> Duration.ofMinutes(30)
-        "1h" -> Duration.ofHours(1)
-        "4h" -> Duration.ofHours(4)
-        "1d" -> Duration.ofDays(1)
-        else -> Duration.ofMinutes(3) // Por defecto
+        else -> Duration.ofMinutes(3)
     }
 }

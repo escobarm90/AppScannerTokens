@@ -17,7 +17,6 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Settings
@@ -35,14 +34,6 @@ import androidx.core.content.ContextCompat
 import androidx.core.content.edit
 import java.util.Locale
 
-data class AlertaData(
-    val token: String,
-    val senal: String,
-    val hora: String,
-    val pnlInfo: String,
-    val detalles: String
-)
-
 class MainActivity : ComponentActivity() {
 
     private lateinit var prefs: SharedPreferences
@@ -57,10 +48,15 @@ class MainActivity : ComponentActivity() {
             val token = intent.getStringExtra("token") ?: ""
             val senal = intent.getStringExtra("senal") ?: ""
             val hora = intent.getStringExtra("hora") ?: ""
-            val pnlInfo = intent.getStringExtra("pnl_info") ?: ""
-            val cuerpo = intent.getStringExtra("cuerpo") ?: ""
+            val precio = intent.getStringExtra("precio") ?: ""
+            val margen = intent.getStringExtra("margen") ?: ""
+            val apalancamiento = intent.getStringExtra("apalancamiento") ?: ""
+            val tp = intent.getStringExtra("tp") ?: ""
+            val sl = intent.getStringExtra("sl") ?: ""
+            val roi = intent.getStringExtra("roi") ?: ""
+            val pnlNeto = intent.getStringExtra("pnl_neto") ?: ""
 
-            alertas.add(0, AlertaData(token, senal, hora, pnlInfo, cuerpo))
+            alertas.add(0, AlertaData(token, senal, hora, precio, margen, apalancamiento, tp, sl, roi, pnlNeto))
         }
     }
 
@@ -189,8 +185,8 @@ fun MainScreen(
                 Text(
                     text = "Saldo Billetera: $${String.format(Locale.US, "%.2f", saldoBilletera)} USDT",
                     color = Color(0xFFE3B341),
-                    fontSize = 16.sp,
-                    fontWeight = FontWeight.Medium
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.SemiBold
                 )
             }
 
@@ -240,51 +236,9 @@ fun MainScreen(
                         modifier = Modifier.align(Alignment.Center)
                     )
                 } else {
-                    LazyColumn(modifier = Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    LazyColumn(modifier = Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                         items(alertas) { alerta ->
-                            Card(
-                                modifier = Modifier.fillMaxWidth(),
-                                colors = CardDefaults.cardColors(containerColor = Color(0xFF161B22)),
-                                shape = RoundedCornerShape(8.dp)
-                            ) {
-                                Column(modifier = Modifier.padding(16.dp)) {
-                                    Row(
-                                        modifier = Modifier.fillMaxWidth(),
-                                        horizontalArrangement = Arrangement.SpaceBetween,
-                                        verticalAlignment = Alignment.CenterVertically
-                                    ) {
-                                        Text(
-                                            text = alerta.token,
-                                            color = Color.White,
-                                            fontSize = 28.sp,
-                                            fontWeight = FontWeight.ExtraBold
-                                        )
-                                        Text(
-                                            text = alerta.hora,
-                                            color = Color(0xFF8B949E),
-                                            fontSize = 14.sp
-                                        )
-                                    }
-
-                                    Spacer(modifier = Modifier.height(4.dp))
-
-                                    Text(
-                                        text = "${if (alerta.senal == "LONG") "🟢" else "🔴"} ${alerta.senal}  |  ${alerta.pnlInfo}",
-                                        color = if (alerta.senal == "LONG") Color(0xFF2EA043) else Color(0xFFF85149),
-                                        fontSize = 18.sp,
-                                        fontWeight = FontWeight.Bold
-                                    )
-
-                                    HorizontalDivider(color = Color(0xFF30363D), modifier = Modifier.padding(vertical = 8.dp))
-
-                                    Text(
-                                        text = alerta.detalles,
-                                        color = Color(0xFFC9D1D9),
-                                        fontSize = 15.sp,
-                                        fontFamily = FontFamily.Monospace
-                                    )
-                                }
-                            }
+                            AlertCard(alerta)
                         }
                     }
                 }
