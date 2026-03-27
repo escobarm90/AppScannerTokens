@@ -53,46 +53,21 @@ class MainActivity : ComponentActivity() {
                 
             """.trimIndent()
 
-            if (alertasText.contains("Esperando oportunidades")) {
-                alertasText = tarjeta
-            } else {
-                alertasText = tarjeta + "\n" + alertasText
-            }
+            alertasText = if (alertasText.contains("Esperando oportunidades")) tarjeta else "$tarjeta\n$alertasText"
         }
     }
 
     private val receptorDebug = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
             val linea = intent.getStringExtra("linea_debug") ?: ""
-            if (debugText.length > 8000) {
-                debugText = linea + "\n" + debugText.substring(0, 6000)
-            } else {
-                debugText = linea + "\n" + debugText
-            }
+            debugText = "$linea\n${if (debugText.length > 6000) debugText.substring(0, 6000) else debugText}"
         }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        prefs = getSharedPreferences("TradingPrefs", MODE_PRIVATE)
-        motorActivo = prefs.getBoolean("recibir_alertas", false)
-
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            if (ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
-                ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.POST_NOTIFICATIONS), 101)
-            }
-        }
-
-        val filterAlertas = IntentFilter("NUEVA_ALERTA")
-        val filterDebug = IntentFilter("NUEVO_DEBUG")
-
-        // Corrección: Usamos ContextCompat para evitar el error de importación del RECEIVER_NOT_EXPORTED
-        ContextCompat.registerReceiver(this, receptorAlertas, filterAlertas, ContextCompat.RECEIVER_NOT_EXPORTED)
-        ContextCompat.registerReceiver(this, receptorDebug, filterDebug, ContextCompat.RECEIVER_NOT_EXPORTED)
-
-        if (motorActivo) iniciarMotor()
-
+        // 1. RENDERIZAMOS LA UI PRIMERO (Evita pantalla en blanco si hay crasheo)
         setContent {
             MaterialTheme {
                 MainScreen(
@@ -100,7 +75,6 @@ class MainActivity : ComponentActivity() {
                     debugText = debugText,
                     motorActivo = motorActivo,
                     onConfigClick = {
-                        // Corrección: Forzamos el contexto explícito
                         startActivity(Intent(this@MainActivity, ConfigActivity::class.java))
                     },
                     onToggleMotor = { isChecked ->
@@ -118,15 +92,51 @@ class MainActivity : ComponentActivity() {
                 )
             }
         }
+
+        // 2. LÓGICA DE PREFERENCIAS Y PERMISOS DESPUÉS DEL RENDER
+        prefs = getSharedPreferences("TradingPrefs", MODE_PRIVATE)
+        motorActivo = prefs.getBoolean("recibir_alertas", false)
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            if (ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+                ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.POST_NOTIFICATIONS), 101)
+            }
+        }
+
+        try {
+            val filterAlertas = IntentFilter("NUEVA_ALERTA")
+            val filterDebug = IntentFilter("NUEVO_DEBUG")
+            ContextCompat.registerReceiver(this, receptorAlertas, filterAlertas, ContextCompat.RECEIVER_NOT_EXPORTED)
+            ContextCompat.registerReceiver(this, receptorDebug, filterDebug, ContextCompat.RECEIVER_NOT_EXPORTED)
+        } catch (e: Exception) {
+            debugText = "⚠️ Error registrando receivers: ${e.message}\n$debugText"
+        }
+
+        // Si estaba encendido en la sesión anterior, lo prendemos con cuidado
+        if (motorActivo) iniciarMotor()
     }
 
     private fun iniciarMotor() {
-        val serviceIntent = Intent(this, TradingScannerService::class.java)
-        startForegroundService(serviceIntent)
+        try {
+            val serviceIntent = Intent(this, TradingScannerService::class.java)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                startForegroundService(serviceIntent)
+            } else {
+                startService(serviceIntent)
+            }
+        } catch (e: Exception) {
+            debugText = "🚨 CRASH PREVENIDO AL INICIAR SERVICIO: ${e.message}\n$debugText"
+            motorActivo = false
+            prefs.edit { putBoolean("recibir_alertas", false) }
+        }
     }
 
     private fun detenerMotor() {
-        stopService(Intent(this, TradingScannerService::class.java))
+        try {
+            stopService(Intent(this, TradingScannerService::class.java))
+        } catch (e: Exception) {
+            debugText = "⚠️ Error deteniendo servicio: ${e.message}\n$debugText"
+        }
     }
 
     override fun onDestroy() {

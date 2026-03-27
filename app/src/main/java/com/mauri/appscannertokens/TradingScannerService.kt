@@ -18,7 +18,6 @@ import okhttp3.Request
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
 import org.ta4j.core.BarSeries
-import org.ta4j.core.BaseBar
 import org.ta4j.core.BaseBarSeriesBuilder
 import org.ta4j.core.indicators.ATRIndicator
 import org.ta4j.core.indicators.RSIIndicator
@@ -29,6 +28,7 @@ import org.ta4j.core.indicators.bollinger.BollingerBandsMiddleIndicator
 import org.ta4j.core.indicators.bollinger.BollingerBandsUpperIndicator
 import org.ta4j.core.indicators.helpers.ClosePriceIndicator
 import org.ta4j.core.indicators.statistics.StandardDeviationIndicator
+import org.ta4j.core.num.DecimalNum
 import java.nio.charset.StandardCharsets
 import java.time.Duration
 import java.time.Instant
@@ -56,25 +56,34 @@ class TradingScannerService : Service() {
 
     override fun onCreate() {
         super.onCreate()
-        crearCanalNotificacion()
+        try {
+            crearCanalNotificacion()
+        } catch (e: Exception) {
+            enviarDebug("⚠️ Error al crear canal: ${e.message}")
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        val notification = NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("Motor Scanner Activo")
-            .setContentText("Monitoreando pares en vivo...")
-            .setSmallIcon(android.R.drawable.ic_menu_compass)
-            .build()
+        try {
+            // CORRECCIÓN: Usa nuestro propio icono para no crashear
+            val notification = NotificationCompat.Builder(this, CHANNEL_ID)
+                .setContentTitle("Motor Scanner Activo")
+                .setContentText("Monitoreando pares en vivo...")
+                .setSmallIcon(R.mipmap.ic_launcher)
+                .build()
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            startForeground(1, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
-        } else {
-            startForeground(1, notification)
-        }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                startForeground(1, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
+            } else {
+                startForeground(1, notification)
+            }
 
-        if (!isScanning) {
-            iniciarMotorBinance()
-            isScanning = true
+            if (!isScanning) {
+                iniciarMotorBinance()
+                isScanning = true
+            }
+        } catch (e: Exception) {
+            enviarDebug("🚨 CRASH PREVENIDO en onStartCommand: ${e.message}")
         }
 
         return START_STICKY
@@ -92,7 +101,7 @@ class TradingScannerService : Service() {
 
                 for (symbol in topPares) {
                     descargarVelas(symbol, tframe, duracion)
-                    Thread.sleep(50)
+                    Thread.sleep(50) // Respetamos rate limits de Binance
                 }
 
                 enviarDebug("✅ 250 velas descargadas por par.")
@@ -101,7 +110,7 @@ class TradingScannerService : Service() {
                 iniciarWebsocketMultiplex(topPares, tframe, duracion)
 
             } catch (e: Exception) {
-                enviarDebug("❌ Error fatal: ${e.message}")
+                enviarDebug("❌ Error fatal en Motor: ${e.message}")
             }
         }.start()
     }
@@ -147,6 +156,7 @@ class TradingScannerService : Service() {
                 for (elem in klines) {
                     val k = elem.asJsonArray
                     val closeTime = k.get(6).asLong
+
                     val open = k.get(1).asDouble
                     val high = k.get(2).asDouble
                     val low = k.get(3).asDouble
@@ -154,11 +164,20 @@ class TradingScannerService : Service() {
                     val vol = k.get(5).asDouble
 
                     val endTime = Instant.ofEpochMilli(closeTime)
+                    val beginTime = endTime.minus(duracion)
+
                     serie.addBar(
-                        BaseBar(
-                            duracion, endTime,
-                            serie.numOf(open), serie.numOf(high), serie.numOf(low),
-                            serie.numOf(close), serie.numOf(vol), serie.numOf(0)
+                        org.ta4j.core.BaseBar(
+                            duracion,
+                            beginTime,
+                            endTime,
+                            DecimalNum.valueOf(open),
+                            DecimalNum.valueOf(high),
+                            DecimalNum.valueOf(low),
+                            DecimalNum.valueOf(close),
+                            DecimalNum.valueOf(vol),
+                            DecimalNum.valueOf(0.0),
+                            0L
                         )
                     )
                 }
@@ -188,6 +207,7 @@ class TradingScannerService : Service() {
                     if (!mercado.containsKey(symbol)) return
 
                     val closeTime = kline.get("T").asLong
+
                     val open = kline.get("o").asDouble
                     val high = kline.get("h").asDouble
                     val low = kline.get("l").asDouble
@@ -195,12 +215,20 @@ class TradingScannerService : Service() {
                     val vol = kline.get("v").asDouble
 
                     val endTime = Instant.ofEpochMilli(closeTime)
+                    val beginTime = endTime.minus(duracion)
                     val serie = mercado[symbol] ?: return
 
-                    val vela = BaseBar(
-                        duracion, endTime,
-                        serie.numOf(open), serie.numOf(high), serie.numOf(low),
-                        serie.numOf(close), serie.numOf(vol), serie.numOf(0)
+                    val vela = org.ta4j.core.BaseBar(
+                        duracion,
+                        beginTime,
+                        endTime,
+                        DecimalNum.valueOf(open),
+                        DecimalNum.valueOf(high),
+                        DecimalNum.valueOf(low),
+                        DecimalNum.valueOf(close),
+                        DecimalNum.valueOf(vol),
+                        DecimalNum.valueOf(0.0),
+                        0L
                     )
 
                     if (serie.barCount > 0 && serie.lastBar.endTime == endTime) {
@@ -282,8 +310,9 @@ class TradingScannerService : Service() {
         val sma20 = SMAIndicator(closePrice, 20)
         val sd20 = StandardDeviationIndicator(closePrice, 20)
         val bbMiddle = BollingerBandsMiddleIndicator(sma20)
-        val bbUpper = BollingerBandsUpperIndicator(bbMiddle, sd20, series.numOf(2.0))
-        val bbLower = BollingerBandsLowerIndicator(bbMiddle, sd20, series.numOf(2.0))
+
+        val bbUpper = BollingerBandsUpperIndicator(bbMiddle, sd20, DecimalNum.valueOf(2.0))
+        val bbLower = BollingerBandsLowerIndicator(bbMiddle, sd20, DecimalNum.valueOf(2.0))
 
         val precioActual = closePrice.getValue(ultima).doubleValue()
         val precioApertura = series.getBar(ultima).openPrice.doubleValue()
@@ -386,7 +415,7 @@ class TradingScannerService : Service() {
             │ 📉 EMA 200: ${String.format(Locale.US, "%.4f", valorEma200)}
             │ 📏 ATR (%): ${String.format(Locale.US, "%.3f%%", atrP)}
             │ 🎯 SEÑAL: $senalPrevia
-            │ 🛡️ ESTADO: ${if (razonRechazo.isEmpty()) "ESPERANDO" else razonRechazo}
+            │ 🛡️ ESTADO: ${razonRechazo.ifEmpty { "ESPERANDO" }}
             ╰────────────────────────────────────────╯
         """.trimIndent()
 
