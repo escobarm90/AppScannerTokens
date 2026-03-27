@@ -4,27 +4,33 @@
     <shared>
       <config />
     </shared>
-    <layouts>
-      <layout url="file://$PROJECT_DIR$/app/src/main/res/layout/activity_main.xml">
-        <config>
-          <theme>@style/Theme.AppCompat.Light.NoActionBar</theme>
-        </config>
-      </layout>
-      <layout url="file://$PROJECT_DIR$/app/src/main/res/layout/user_configs.xml">
-        <config>
-          <theme>@style/Theme.AppCompat.NoActionBar</theme>
-        </config>
-      </layout>
-    </layouts>
   </component>
   <component name="AutoImportSettings">
     <option name="autoReloadType" value="NONE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="f47cbd80-7e7b-4408-8a49-fc9584e2fa18" name="Changes" comment="Version 1.0 Funcionando en modo debug">
-      <change afterPath="$PROJECT_DIR$/app/src/main/res/layout/user_configs.xml" afterDir="false" />
+    <list default="true" id="f47cbd80-7e7b-4408-8a49-fc9584e2fa18" name="Changes" comment="Version 1.1 Migrado a Kotlin, migrado a Jetpack COmpose">
+      <change afterPath="$PROJECT_DIR$/.idea/assetWizardSettings.xml" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/.idea/inspectionProfiles/Project_Default.xml" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/app/src/main/java/com/mauri/appscannertokens/ConfigActivity.kt" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/app/src/main/java/com/mauri/appscannertokens/ConfigScreen.kt" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/app/src/main/java/com/mauri/appscannertokens/ConfigViewModel.kt" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/app/src/main/java/com/mauri/appscannertokens/Constants.kt" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/app/src/main/java/com/mauri/appscannertokens/MainActivity.kt" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/app/src/main/java/com/mauri/appscannertokens/MyFirebaseMessagingService.kt" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/app/src/main/java/com/mauri/appscannertokens/TradingScannerService.kt" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/app/src/main/res/values/strings.xml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/app/src/main/java/com/mauri/appscannertokens/TradingScannerService.java" beforeDir="false" afterPath="$PROJECT_DIR$/app/src/main/java/com/mauri/appscannertokens/TradingScannerService.java" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/app/build.gradle" beforeDir="false" afterPath="$PROJECT_DIR$/app/build.gradle" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/app/src/main/AndroidManifest.xml" beforeDir="false" afterPath="$PROJECT_DIR$/app/src/main/AndroidManifest.xml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/app/src/main/java/com/mauri/appscannertokens/MainActivity.java" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/app/src/main/java/com/mauri/appscannertokens/MyFirebaseMessagingService.java" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/app/src/main/java/com/mauri/appscannertokens/TradingScannerService.java" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/app/src/main/res/layout/activity_main.xml" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/app/src/main/res/layout/user_configs.xml" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/build.gradle" beforeDir="false" afterPath="$PROJECT_DIR$/build.gradle" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/gradle.properties" beforeDir="false" afterPath="$PROJECT_DIR$/gradle.properties" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/gradle/wrapper/gradle-wrapper.properties" beforeDir="false" afterPath="$PROJECT_DIR$/gradle/wrapper/gradle-wrapper.properties" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -34,7 +40,7 @@
   <component name="ClangdSettings">
     <option name="formatViaClangd" value="false" />
   </component>
-  <component name="ExecutionTargetManager" SELECTED_TARGET="device_and_snapshot_combo_box_target[PhysicalDevice::serial=R5CW81L938R]" />
+  <component name="ExecutionTargetManager" SELECTED_TARGET="device_and_snapshot_combo_box_target[LocalEmulator::path=C:\Users\yomau\.android\avd\Medium_Phone.avd]" />
   <component name="ExternalProjectsData">
     <projectState path="$PROJECT_DIR$">
       <ProjectState />
@@ -43,8 +49,10 @@
   <component name="FileTemplateManagerImpl">
     <option name="RECENT_TEMPLATES">
       <list>
-        <option value="Class" />
         <option value="layoutResourceFile" />
+        <option value="Class" />
+        <option value="Kotlin Class" />
+        <option value="Kotlin File" />
       </list>
     </option>
   </component>
@@ -63,6 +71,9 @@
     &quot;accountId&quot;: &quot;797a8c87-e548-4657-aaed-1dd1220bed0a&quot;
   }
 }</component>
+  <component name="ProblemsViewState">
+    <option name="selectedTabId" value="CurrentFile" />
+  </component>
   <component name="ProjectColorInfo">{
   &quot;associatedIndex&quot;: 3
 }</component>
@@ -80,6 +91,7 @@
     &quot;GradleDaemonJvmCriteriaMigrationNotification.isNotificationDisabled&quot;: &quot;true&quot;,
     &quot;ModuleVcsDetector.initialDetectionPerformed&quot;: &quot;true&quot;,
     &quot;RunOnceActivity.ShowReadmeOnStart&quot;: &quot;true&quot;,
+    &quot;RunOnceActivity.TerminalTabsStorage.copyFrom.TerminalArrangementManager.252&quot;: &quot;true&quot;,
     &quot;RunOnceActivity.cidr.known.project.marker&quot;: &quot;true&quot;,
     &quot;RunOnceActivity.git.unshallow&quot;: &quot;true&quot;,
     &quot;RunOnceActivity.readMode.enableVisualFormatting&quot;: &quot;true&quot;,
@@ -91,7 +103,7 @@
     &quot;ignore.virus.scanning.warn.message&quot;: &quot;true&quot;,
     &quot;kotlin-language-version-configured&quot;: &quot;true&quot;,
     &quot;last_opened_file_path&quot;: &quot;C:/Users/yomau/Desktop/Crypto/buscador2/TradingAlertsApp&quot;,
-    &quot;settings.editor.selected.configurable&quot;: &quot;device.mirroring&quot;
+    &quot;settings.editor.selected.configurable&quot;: &quot;preferences.keymap&quot;
   }
 }</component>
   <component name="RecentsManager">
@@ -277,7 +289,15 @@
       <option name="project" value="LOCAL" />
       <updated>1774486434919</updated>
     </task>
-    <option name="localTasksCounter" value="4" />
+    <task id="LOCAL-00004" summary="Version 1.0 Funcionando en modo debug">
+      <option name="closed" value="true" />
+      <created>1774562569853</created>
+      <option name="number" value="00004" />
+      <option name="presentableId" value="LOCAL-00004" />
+      <option name="project" value="LOCAL" />
+      <updated>1774562569853</updated>
+    </task>
+    <option name="localTasksCounter" value="5" />
     <servers />
   </component>
   <component name="Vcs.Log.Tabs.Properties">
@@ -298,7 +318,8 @@
     <MESSAGE value="1" />
     <MESSAGE value="Con Error en  la libreria Ta4J" />
     <MESSAGE value="Version 1.0 Funcionando en modo debug" />
-    <option name="LAST_COMMIT_MESSAGE" value="Version 1.0 Funcionando en modo debug" />
+    <MESSAGE value="Version 1.1 Migrado a Kotlin, migrado a Jetpack COmpose" />
+    <option name="LAST_COMMIT_MESSAGE" value="Version 1.1 Migrado a Kotlin, migrado a Jetpack COmpose" />
   </component>
   <component name="github-copilot-workspace">
     <instructionFileLocations>
@@ -323,12 +344,12 @@
         </entry>
         <entry key="com.mauri.appscannertokens">
           <value>
-            <CheckInfo lastCheckTimestamp="1774479840994" />
+            <CheckInfo lastCheckTimestamp="1774566709532" />
           </value>
         </entry>
         <entry key="com.mauri.appscannertokens.test">
           <value>
-            <CheckInfo lastCheckTimestamp="1774479840998" />
+            <CheckInfo lastCheckTimestamp="1774566709529" />
           </value>
         </entry>
         <entry key="com.mauri.tradingbot">

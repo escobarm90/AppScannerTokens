@@ -1,50 +1,76 @@
 plugins {
     id 'com.android.application'
+    id 'org.jetbrains.kotlin.android' // 🔥 DEBES INCLUIR ESTO
     id 'com.google.gms.google-services'
 }
 
 android {
     namespace 'com.mauri.appscannertokens'
-    compileSdk 34
+    compileSdk 35
 
     defaultConfig {
         applicationId "com.mauri.appscannertokens"
         minSdk 26
-        targetSdk 34
+        targetSdk 35
         versionCode 1
         versionName "1.0"
+    }
+
+    // 🔥 ESTE BLOQUE ENCIENDE COMPOSE
+    buildFeatures {
+        compose true
+    }
+
+    // 🔥 EMPAREJA EL COMPILADOR CON KOTLIN 1.9.22
+    composeOptions {
+        kotlinCompilerExtensionVersion '1.5.10'
     }
 
     compileOptions {
         sourceCompatibility JavaVersion.VERSION_17
         targetCompatibility JavaVersion.VERSION_17
+        coreLibraryDesugaringEnabled true
+    }
+    kotlinOptions {
+        jvmTarget = '17'
     }
 }
 
 dependencies {
-    implementation 'androidx.appcompat:appcompat:1.6.1'
-    implementation 'com.google.android.material:material:1.10.0'
+    coreLibraryDesugaring 'com.android.tools:desugar_jdk_libs:2.1.5'
+
+    implementation 'androidx.appcompat:appcompat:1.7.0'
+    implementation 'com.google.android.material:material:1.12.0'
     implementation 'androidx.constraintlayout:constraintlayout:2.1.4'
+    implementation 'androidx.core:core-ktx:1.13.1' // Requerido para extensiones KTX
 
     // Firebase BoM
-    implementation platform('com.google.firebase:firebase-bom:34.11.0')
-
-    // Módulos de Firebase
+    implementation platform('com.google.firebase:firebase-bom:33.1.2')
     implementation 'com.google.firebase:firebase-analytics'
     implementation 'com.google.firebase:firebase-messaging'
     implementation 'com.google.firebase:firebase-installations'
-    implementation 'com.google.firebase:firebase-database:22.0.1'
+    implementation 'com.google.firebase:firebase-database'
 
     // DataStore y Lifecycle
-    implementation 'androidx.datastore:datastore-preferences:1.0.0'
-    implementation 'androidx.datastore:datastore-preferences-core:1.0.0'
-    implementation 'androidx.lifecycle:lifecycle-viewmodel-ktx:2.6.2'
-    implementation 'androidx.lifecycle:lifecycle-livedata-ktx:2.6.2'
+    implementation 'androidx.datastore:datastore-preferences:1.1.1'
+    implementation 'androidx.datastore:datastore-preferences-core:1.1.1'
+    implementation 'androidx.lifecycle:lifecycle-viewmodel-ktx:2.8.4'
+    implementation 'androidx.lifecycle:lifecycle-livedata-ktx:2.8.4'
+    implementation 'androidx.lifecycle:lifecycle-viewmodel-compose:2.8.4'
 
-    // Trading Indicators (ta4j) - Version 0.15 is compatible with Java 17
-    implementation 'org.ta4j:ta4j-core:0.15'
+    // Trading Indicators (ta4j)
+    implementation 'org.ta4j:ta4j-core:0.22.4'
 
     // Networking & JSON
     implementation 'com.squareup.okhttp3:okhttp:4.12.0'
     implementation 'com.google.code.gson:gson:2.11.0'
+
+    // Jetpack Compose BoM y dependencias
+    def composeBom = platform('androidx.compose:compose-bom:2024.06.00')
+    implementation composeBom
+    implementation 'androidx.compose.ui:ui'
+    implementation 'androidx.compose.material3:material3'
+    implementation 'androidx.activity:activity-compose:1.9.1'
+    // Soluciona el error Unresolved reference 'Icons':
+    implementation 'androidx.compose.material:material-icons-extended'
 }
