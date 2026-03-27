@@ -1,6 +1,6 @@
 plugins {
     id 'com.android.application'
-    id 'org.jetbrains.kotlin.android' // 🔥 DEBES INCLUIR ESTO
+    id 'org.jetbrains.kotlin.android'
     id 'com.google.gms.google-services'
 }
 
@@ -50,6 +50,7 @@ dependencies {
     implementation 'com.google.firebase:firebase-messaging'
     implementation 'com.google.firebase:firebase-installations'
     implementation 'com.google.firebase:firebase-database'
+
 
     // DataStore y Lifecycle
     implementation 'androidx.datastore:datastore-preferences:1.1.1'

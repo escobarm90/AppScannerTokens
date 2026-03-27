@@ -28,12 +28,10 @@ import org.ta4j.core.indicators.bollinger.BollingerBandsMiddleIndicator
 import org.ta4j.core.indicators.bollinger.BollingerBandsUpperIndicator
 import org.ta4j.core.indicators.helpers.ClosePriceIndicator
 import org.ta4j.core.indicators.statistics.StandardDeviationIndicator
-import org.ta4j.core.num.DecimalNum
+import org.ta4j.core.num.DoubleNum
 import java.nio.charset.StandardCharsets
 import java.time.Duration
 import java.time.Instant
-import java.time.ZoneId
-import java.time.ZonedDateTime
 import java.util.Locale
 import java.util.concurrent.ConcurrentHashMap
 import javax.crypto.Mac
@@ -65,14 +63,15 @@ class TradingScannerService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         try {
-            // CORRECCIÓN: Usa nuestro propio icono para no crashear
             val notification = NotificationCompat.Builder(this, CHANNEL_ID)
                 .setContentTitle("Motor Scanner Activo")
                 .setContentText("Monitoreando pares en vivo...")
                 .setSmallIcon(R.mipmap.ic_launcher)
                 .build()
 
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                startForeground(1, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
+            } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 startForeground(1, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
             } else {
                 startForeground(1, notification)
@@ -101,7 +100,7 @@ class TradingScannerService : Service() {
 
                 for (symbol in topPares) {
                     descargarVelas(symbol, tframe, duracion)
-                    Thread.sleep(50) // Respetamos rate limits de Binance
+                    Thread.sleep(50)
                 }
 
                 enviarDebug("✅ 250 velas descargadas por par.")
@@ -151,7 +150,13 @@ class TradingScannerService : Service() {
             client.newCall(request).execute().use { response ->
                 val json = response.body?.string() ?: return
                 val klines = JsonParser.parseString(json).asJsonArray
-                val serie = BaseBarSeriesBuilder().withName(symbol).withMaxBarCount(250).build()
+
+                // 🔥 SOLUCIÓN: Pasamos la clase de Java directamente. 100% compatible con Kotlin
+                val serie = BaseBarSeriesBuilder()
+                    .withName(symbol)
+                    .withMaxBarCount(250)
+                    .withNumTypeOf(DoubleNum::class.java)
+                    .build()
 
                 for (elem in klines) {
                     val k = elem.asJsonArray
@@ -171,12 +176,12 @@ class TradingScannerService : Service() {
                             duracion,
                             beginTime,
                             endTime,
-                            DecimalNum.valueOf(open),
-                            DecimalNum.valueOf(high),
-                            DecimalNum.valueOf(low),
-                            DecimalNum.valueOf(close),
-                            DecimalNum.valueOf(vol),
-                            DecimalNum.valueOf(0.0),
+                            DoubleNum.valueOf(open),
+                            DoubleNum.valueOf(high),
+                            DoubleNum.valueOf(low),
+                            DoubleNum.valueOf(close),
+                            DoubleNum.valueOf(vol),
+                            DoubleNum.valueOf(0.0),
                             0L
                         )
                     )
@@ -222,12 +227,12 @@ class TradingScannerService : Service() {
                         duracion,
                         beginTime,
                         endTime,
-                        DecimalNum.valueOf(open),
-                        DecimalNum.valueOf(high),
-                        DecimalNum.valueOf(low),
-                        DecimalNum.valueOf(close),
-                        DecimalNum.valueOf(vol),
-                        DecimalNum.valueOf(0.0),
+                        DoubleNum.valueOf(open),
+                        DoubleNum.valueOf(high),
+                        DoubleNum.valueOf(low),
+                        DoubleNum.valueOf(close),
+                        DoubleNum.valueOf(vol),
+                        DoubleNum.valueOf(0.0),
                         0L
                     )
 
@@ -311,8 +316,8 @@ class TradingScannerService : Service() {
         val sd20 = StandardDeviationIndicator(closePrice, 20)
         val bbMiddle = BollingerBandsMiddleIndicator(sma20)
 
-        val bbUpper = BollingerBandsUpperIndicator(bbMiddle, sd20, DecimalNum.valueOf(2.0))
-        val bbLower = BollingerBandsLowerIndicator(bbMiddle, sd20, DecimalNum.valueOf(2.0))
+        val bbUpper = BollingerBandsUpperIndicator(bbMiddle, sd20, DoubleNum.valueOf(2.0))
+        val bbLower = BollingerBandsLowerIndicator(bbMiddle, sd20, DoubleNum.valueOf(2.0))
 
         val precioActual = closePrice.getValue(ultima).doubleValue()
         val precioApertura = series.getBar(ultima).openPrice.doubleValue()
@@ -415,7 +420,7 @@ class TradingScannerService : Service() {
             │ 📉 EMA 200: ${String.format(Locale.US, "%.4f", valorEma200)}
             │ 📏 ATR (%): ${String.format(Locale.US, "%.3f%%", atrP)}
             │ 🎯 SEÑAL: $senalPrevia
-            │ 🛡️ ESTADO: ${razonRechazo.ifEmpty { "ESPERANDO" }}
+            │ 🛡️ ESTADO: ${if (razonRechazo.isEmpty()) "ESPERANDO" else razonRechazo}
             ╰────────────────────────────────────────╯
         """.trimIndent()
 
