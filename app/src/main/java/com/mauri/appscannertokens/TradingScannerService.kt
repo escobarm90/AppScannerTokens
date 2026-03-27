@@ -30,8 +30,10 @@ import org.ta4j.core.indicators.helpers.ClosePriceIndicator
 import org.ta4j.core.indicators.statistics.StandardDeviationIndicator
 import org.ta4j.core.num.DoubleNum
 import java.nio.charset.StandardCharsets
+import java.text.SimpleDateFormat
 import java.time.Duration
 import java.time.Instant
+import java.util.Date
 import java.util.Locale
 import java.util.concurrent.ConcurrentHashMap
 import javax.crypto.Mac
@@ -51,6 +53,11 @@ class TradingScannerService : Service() {
     private val client = OkHttpClient()
     private var webSocket: WebSocket? = null
     private val mercado: MutableMap<String, BarSeries> = ConcurrentHashMap()
+    private val ultimaAlertaPorToken = ConcurrentHashMap<String, Long>()
+
+    // Caché de Billetera para no saturar la API
+    private var ultimoSaldoCache: Double = 0.0
+    private var ultimaVezSaldoActualizado: Long = 0L
 
     override fun onCreate() {
         super.onCreate()
@@ -151,7 +158,6 @@ class TradingScannerService : Service() {
                 val json = response.body?.string() ?: return
                 val klines = JsonParser.parseString(json).asJsonArray
 
-                // 🔥 SOLUCIÓN: Creamos una lista temporal para guardar las velas
                 val velas = mutableListOf<org.ta4j.core.Bar>()
 
                 for (elem in klines) {
@@ -167,7 +173,6 @@ class TradingScannerService : Service() {
                     val endTime = Instant.ofEpochMilli(closeTime)
                     val beginTime = endTime.minus(duracion)
 
-                    // Agregamos la vela formateada con DoubleNum a la lista
                     velas.add(
                         org.ta4j.core.BaseBar(
                             duracion,
@@ -184,8 +189,6 @@ class TradingScannerService : Service() {
                     )
                 }
 
-                // Le entregamos la lista a la caja constructora.
-                // Automáticamente adopta el sistema DoubleNum y esquiva el error de Android 14.
                 val serie = BaseBarSeriesBuilder()
                     .withName(symbol)
                     .withMaxBarCount(250)
@@ -263,29 +266,34 @@ class TradingScannerService : Service() {
     }
 
     private fun obtenerSaldoBilleteraUSDT(): Double {
+        val saldoManual = prefs.getFloat(PrefKeys.BILLETERA_MANUAL, 20.0f).toDouble()
         val apiKey = prefs.getString(PrefKeys.API_KEY, "") ?: ""
         val secretKey = prefs.getString(PrefKeys.SECRET_KEY, "") ?: ""
-        val saldoManual = prefs.getFloat(PrefKeys.BILLETERA_MANUAL, 20.0f).toDouble()
 
         if (apiKey.isEmpty() || secretKey.isEmpty()) {
+            enviarSaldoAMainActivity(saldoManual)
             return saldoManual
         }
 
+        val tiempoActual = System.currentTimeMillis()
+        // Caché: Solo consultamos la API cada 30 segundos (evita bloqueos de Binance)
+        if (tiempoActual - ultimaVezSaldoActualizado < 30_000L && ultimoSaldoCache > 0.0) {
+            return ultimoSaldoCache
+        }
+
         return try {
-            val timestamp = System.currentTimeMillis()
-            val queryString = "timestamp=$timestamp"
+            val queryString = "timestamp=$tiempoActual"
 
             val sha256HMAC = Mac.getInstance("HmacSHA256")
-            val secretKeySpec = SecretKeySpec(secretKey.toByteArray(StandardCharsets.UTF_8), "HmacSHA256")
+            val secretKeySpec = SecretKeySpec(secretKey.trim().toByteArray(StandardCharsets.UTF_8), "HmacSHA256")
             sha256HMAC.init(secretKeySpec)
             val hash = sha256HMAC.doFinal(queryString.toByteArray(StandardCharsets.UTF_8))
-
             val signature = hash.joinToString("") { "%02x".format(it) }
 
             val url = "https://fapi.binance.com/fapi/v2/balance?$queryString&signature=$signature"
             val request = Request.Builder()
                 .url(url)
-                .addHeader("X-MBX-APIKEY", apiKey)
+                .addHeader("X-MBX-APIKEY", apiKey.trim())
                 .build()
 
             client.newCall(request).execute().use { response ->
@@ -294,16 +302,29 @@ class TradingScannerService : Service() {
                     for (b in balances) {
                         val balance = b.asJsonObject
                         if (balance.get("asset").asString == "USDT") {
-                            return balance.get("balance").asDouble
+                            val saldoReal = balance.get("balance").asDouble
+                            ultimoSaldoCache = saldoReal
+                            ultimaVezSaldoActualizado = tiempoActual
+                            enviarSaldoAMainActivity(saldoReal)
+                            return saldoReal
                         }
                     }
                 }
             }
+            enviarSaldoAMainActivity(saldoManual)
             saldoManual
         } catch (e: Exception) {
-            enviarDebug("⚠️ Error API Binance: ${e.message}. Usando saldo manual.")
+            enviarDebug("⚠️ Error API Binance: ${e.message}. Usando manual.")
+            enviarSaldoAMainActivity(saldoManual)
             saldoManual
         }
+    }
+
+    private fun enviarSaldoAMainActivity(saldo: Double) {
+        val intent = Intent("NUEVO_SALDO")
+        intent.setPackage(packageName)
+        intent.putExtra("saldo", saldo)
+        sendBroadcast(intent)
     }
 
     private fun calcularIndicadores(symbol: String, series: BarSeries) {
@@ -362,57 +383,71 @@ class TradingScannerService : Service() {
         var razonRechazo = ""
 
         if (senal != "NEUTRAL") {
-            val billeteraReal = obtenerSaldoBilleteraUSDT()
-            val tamanoPosPct = prefs.getFloat(PrefKeys.TAMANO_POS_PCT, 30.0f) / 100.0
-            val apalancamiento = prefs.getFloat(PrefKeys.APALANCAMIENTO, 20.0f).toDouble()
-            val perdidaMaxPct = prefs.getFloat(PrefKeys.PERDIDA_MAX_PCT, 5.0f) / 100.0
-            val roiMinimo = prefs.getFloat(PrefKeys.ROI_MINIMO, 5.0f).toDouble()
+            val tiempoActual = System.currentTimeMillis()
+            val tiempoUltima = ultimaAlertaPorToken[symbol] ?: 0L
 
-            val margenPorOperacion = billeteraReal * tamanoPosPct
-            val tamanoPosicionReal = margenPorOperacion * apalancamiento
+            if ((tiempoActual - tiempoUltima) < 60_000L) {
+                razonRechazo = "RECHAZADO - EN COOLDOWN (1 MIN)"
+                senal = "NEUTRAL"
+            } else {
+                val billeteraReal = obtenerSaldoBilleteraUSDT()
+                val tamanoPosPct = prefs.getFloat(PrefKeys.TAMANO_POS_PCT, 30.0f) / 100.0
+                val apalancamiento = prefs.getFloat(PrefKeys.APALANCAMIENTO, 20.0f).toDouble()
+                val perdidaMaxPct = prefs.getFloat(PrefKeys.PERDIDA_MAX_PCT, 5.0f) / 100.0
+                val roiMinimo = prefs.getFloat(PrefKeys.ROI_MINIMO, 5.0f).toDouble()
+                val tipoMargen = prefs.getString(PrefKeys.TIPO_MARGEN, "ISOLATED") ?: "ISOLATED"
 
-            if (precioActual > 0) {
-                val cantidadTokens = tamanoPosicionReal / precioActual
-                val perdidaMaximaUSDT = billeteraReal * perdidaMaxPct
-                val distSl = if (cantidadTokens > 0) perdidaMaximaUSDT / cantidadTokens else 0.0
-                val distTp = valorAtr * 2.0
+                val margenPorOperacion = billeteraReal * tamanoPosPct
+                val tamanoPosicionReal = margenPorOperacion * apalancamiento
 
-                val tp = if (senal == "LONG") precioActual + distTp else precioActual - distTp
-                val sl = if (senal == "LONG") precioActual - distSl else precioActual + distSl
+                if (precioActual > 0) {
+                    val cantidadTokens = tamanoPosicionReal / precioActual
+                    val perdidaMaximaUSDT = billeteraReal * perdidaMaxPct
+                    val distSl = if (cantidadTokens > 0) perdidaMaximaUSDT / cantidadTokens else 0.0
+                    val distTp = valorAtr * 2.0
 
-                val gananciaBrutaUSDT = cantidadTokens * distTp
-                val feeEntrada = tamanoPosicionReal * 0.0005
-                val feeSalida = (cantidadTokens * tp) * 0.0005
-                val pnlNeto = gananciaBrutaUSDT - (feeEntrada + feeSalida)
+                    val tp = if (senal == "LONG") precioActual + distTp else precioActual - distTp
+                    val sl = if (senal == "LONG") precioActual - distSl else precioActual + distSl
 
-                val roi = if (margenPorOperacion > 0) (pnlNeto / margenPorOperacion) * 100 else 0.0
+                    val gananciaBrutaUSDT = cantidadTokens * distTp
+                    val feeEntrada = tamanoPosicionReal * 0.0005
+                    val feeSalida = (cantidadTokens * tp) * 0.0005
+                    val pnlNeto = gananciaBrutaUSDT - (feeEntrada + feeSalida)
 
-                if (atrP < 0.12) {
-                    razonRechazo = "RECHAZADO - MERCADO PLANO"
-                    senal = "NEUTRAL"
-                } else if (roi < roiMinimo) {
-                    razonRechazo = String.format(Locale.US, "RECHAZADO - ROI %.2f%% < Mínimo %.2f%%", roi, roiMinimo)
-                    senal = "NEUTRAL"
-                } else {
-                    razonRechazo = "APROBADO ✅"
+                    val roi = if (margenPorOperacion > 0) (pnlNeto / margenPorOperacion) * 100 else 0.0
 
-                    val tituloPush = "${if (senal == "LONG") "🟢" else "🔴"} $senal en $symbol | PNL: $${String.format(Locale.US, "%.2f", pnlNeto)} USDT"
-                    val cuerpoPush = """
-                        💵 ENTRADA: ${String.format(Locale.US, "%.4f", precioActual)}
-                        ✅ TP: ${String.format(Locale.US, "%.4f", tp)}
-                        ❌ SL: ${String.format(Locale.US, "%.4f", sl)}
-                        🏦 BILLETERA: $${String.format(Locale.US, "%.2f", billeteraReal)} USDT
-                        💰 MARGEN: $${String.format(Locale.US, "%.2f", margenPorOperacion)} USDT
-                        🔥 ROI EST: ${String.format(Locale.US, "%.2f%%", roi)}
-                    """.trimIndent()
+                    if (atrP < 0.12) {
+                        razonRechazo = "RECHAZADO - MERCADO PLANO"
+                        senal = "NEUTRAL"
+                    } else if (roi < roiMinimo) {
+                        razonRechazo = String.format(Locale.US, "RECHAZADO - ROI %.2f%% < Mínimo %.2f%%", roi, roiMinimo)
+                        senal = "NEUTRAL"
+                    } else {
+                        razonRechazo = "APROBADO ✅"
+                        ultimaAlertaPorToken[symbol] = tiempoActual
+                        val horaExacta = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date(tiempoActual))
+                        val pnlInfoStr = "PNL: $${String.format(Locale.US, "%.2f", pnlNeto)} USDT"
 
-                    val intent = Intent("NUEVA_ALERTA")
-                    intent.setPackage(packageName)
-                    intent.putExtra("titulo", tituloPush)
-                    intent.putExtra("cuerpo", cuerpoPush)
-                    sendBroadcast(intent)
+                        val cuerpoPush = """
+                            ⚡ APALANCAMIENTO: ${apalancamiento.toInt()}x ($tipoMargen)
+                            💵 ENTRADA: ${String.format(Locale.US, "%.4f", precioActual)}
+                            ✅ TP: ${String.format(Locale.US, "%.4f", tp)}
+                            ❌ SL: ${String.format(Locale.US, "%.4f", sl)}
+                            💰 MARGEN: $${String.format(Locale.US, "%.2f", margenPorOperacion)} USDT
+                            🔥 ROI EST: ${String.format(Locale.US, "%.2f%%", roi)}
+                        """.trimIndent()
 
-                    hacerVibrar(senal)
+                        val intent = Intent("NUEVA_ALERTA")
+                        intent.setPackage(packageName)
+                        intent.putExtra("token", symbol)
+                        intent.putExtra("senal", senal)
+                        intent.putExtra("hora", horaExacta)
+                        intent.putExtra("pnl_info", pnlInfoStr)
+                        intent.putExtra("cuerpo", cuerpoPush)
+                        sendBroadcast(intent)
+
+                        hacerVibrar(senal)
+                    }
                 }
             }
         }
@@ -426,7 +461,7 @@ class TradingScannerService : Service() {
             │ 📉 EMA 200: ${String.format(Locale.US, "%.4f", valorEma200)}
             │ 📏 ATR (%): ${String.format(Locale.US, "%.3f%%", atrP)}
             │ 🎯 SEÑAL: $senalPrevia
-            │ 🛡️ ESTADO: ${razonRechazo.ifEmpty { "ESPERANDO" }}
+            │ 🛡️ ESTADO: ${if (razonRechazo.isEmpty()) "ESPERANDO" else razonRechazo}
             ╰────────────────────────────────────────╯
         """.trimIndent()
 
@@ -434,13 +469,18 @@ class TradingScannerService : Service() {
     }
 
     private fun hacerVibrar(senal: String) {
-        val vibrator = getSystemService(VIBRATOR_SERVICE) as Vibrator
+        val vibrator = getSystemService(Context.VIBRATOR_SERVICE) as Vibrator
         if (vibrator.hasVibrator()) {
             val patronLong = longArrayOf(0, 150, 100, 150)
             val patronShort = longArrayOf(0, 600)
             val patron = if (senal == "LONG") patronLong else patronShort
 
-            vibrator.vibrate(VibrationEffect.createWaveform(patron, -1))
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                vibrator.vibrate(VibrationEffect.createWaveform(patron, -1))
+            } else {
+                @Suppress("DEPRECATION")
+                vibrator.vibrate(patron, -1)
+            }
         }
     }
 
@@ -460,8 +500,10 @@ class TradingScannerService : Service() {
     }
 
     private fun crearCanalNotificacion() {
-        val serviceChannel = NotificationChannel(CHANNEL_ID, "Escáner Nativo", NotificationManager.IMPORTANCE_LOW)
-        getSystemService(NotificationManager::class.java)?.createNotificationChannel(serviceChannel)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val serviceChannel = NotificationChannel(CHANNEL_ID, "Escáner Nativo", NotificationManager.IMPORTANCE_LOW)
+            getSystemService(NotificationManager::class.java)?.createNotificationChannel(serviceChannel)
+        }
     }
 
     private fun cuandoTimeframeADuration(tf: String): Duration = when(tf) {

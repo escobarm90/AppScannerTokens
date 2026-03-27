@@ -14,7 +14,10 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Settings
@@ -30,30 +33,36 @@ import androidx.compose.ui.unit.sp
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import androidx.core.content.edit
+import java.util.Locale
+
+// Estructura de datos para las alertas
+data class AlertaData(
+    val token: String,
+    val senal: String,
+    val hora: String,
+    val pnlInfo: String,
+    val detalles: String
+)
 
 class MainActivity : ComponentActivity() {
 
     private lateinit var prefs: SharedPreferences
 
-    private var alertasText by mutableStateOf("Esperando oportunidades...\n")
+    private var alertas = mutableStateListOf<AlertaData>()
     private var debugText by mutableStateOf("Iniciando motor debug...\n")
     private var motorActivo by mutableStateOf(false)
+    private var saldoBilletera by mutableStateOf(0.0)
 
     private val receptorAlertas = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
-            val titulo = intent.getStringExtra("titulo") ?: ""
+            val token = intent.getStringExtra("token") ?: ""
+            val senal = intent.getStringExtra("senal") ?: ""
+            val hora = intent.getStringExtra("hora") ?: ""
+            val pnlInfo = intent.getStringExtra("pnl_info") ?: ""
             val cuerpo = intent.getStringExtra("cuerpo") ?: ""
 
-            val tarjeta = """
-                ╭─────────────────────────╮
-                ✨ $titulo
-                ├─────────────────────────┤
-                $cuerpo
-                ╰─────────────────────────╯
-                
-            """.trimIndent()
-
-            alertasText = if (alertasText.contains("Esperando oportunidades")) tarjeta else "$tarjeta\n$alertasText"
+            // Insertamos siempre arriba (index 0) para que sea lo primero que se vea
+            alertas.add(0, AlertaData(token, senal, hora, pnlInfo, cuerpo))
         }
     }
 
@@ -64,16 +73,22 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private val receptorSaldo = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            saldoBilletera = intent.getDoubleExtra("saldo", 0.0)
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        // 1. RENDERIZAMOS LA UI PRIMERO (Evita pantalla en blanco si hay crasheo)
         setContent {
             MaterialTheme {
                 MainScreen(
-                    alertasText = alertasText,
+                    alertas = alertas,
                     debugText = debugText,
                     motorActivo = motorActivo,
+                    saldoBilletera = saldoBilletera,
                     onConfigClick = {
                         startActivity(Intent(this@MainActivity, ConfigActivity::class.java))
                     },
@@ -93,9 +108,9 @@ class MainActivity : ComponentActivity() {
             }
         }
 
-        // 2. LÓGICA DE PREFERENCIAS Y PERMISOS DESPUÉS DEL RENDER
         prefs = getSharedPreferences("TradingPrefs", MODE_PRIVATE)
         motorActivo = prefs.getBoolean("recibir_alertas", false)
+        saldoBilletera = prefs.getFloat(PrefKeys.BILLETERA_MANUAL, 0f).toDouble()
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             if (ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
@@ -106,13 +121,15 @@ class MainActivity : ComponentActivity() {
         try {
             val filterAlertas = IntentFilter("NUEVA_ALERTA")
             val filterDebug = IntentFilter("NUEVO_DEBUG")
+            val filterSaldo = IntentFilter("NUEVO_SALDO")
+
             ContextCompat.registerReceiver(this, receptorAlertas, filterAlertas, ContextCompat.RECEIVER_NOT_EXPORTED)
             ContextCompat.registerReceiver(this, receptorDebug, filterDebug, ContextCompat.RECEIVER_NOT_EXPORTED)
+            ContextCompat.registerReceiver(this, receptorSaldo, filterSaldo, ContextCompat.RECEIVER_NOT_EXPORTED)
         } catch (e: Exception) {
             debugText = "⚠️ Error registrando receivers: ${e.message}\n$debugText"
         }
 
-        // Si estaba encendido en la sesión anterior, lo prendemos con cuidado
         if (motorActivo) iniciarMotor()
     }
 
@@ -125,7 +142,6 @@ class MainActivity : ComponentActivity() {
                 startService(serviceIntent)
             }
         } catch (e: Exception) {
-            debugText = "🚨 CRASH PREVENIDO AL INICIAR SERVICIO: ${e.message}\n$debugText"
             motorActivo = false
             prefs.edit { putBoolean("recibir_alertas", false) }
         }
@@ -134,9 +150,7 @@ class MainActivity : ComponentActivity() {
     private fun detenerMotor() {
         try {
             stopService(Intent(this, TradingScannerService::class.java))
-        } catch (e: Exception) {
-            debugText = "⚠️ Error deteniendo servicio: ${e.message}\n$debugText"
-        }
+        } catch (e: Exception) { }
     }
 
     override fun onDestroy() {
@@ -144,15 +158,17 @@ class MainActivity : ComponentActivity() {
         try {
             unregisterReceiver(receptorAlertas)
             unregisterReceiver(receptorDebug)
+            unregisterReceiver(receptorSaldo)
         } catch (e: Exception) { }
     }
 }
 
 @Composable
 fun MainScreen(
-    alertasText: String,
+    alertas: List<AlertaData>,
     debugText: String,
     motorActivo: Boolean,
+    saldoBilletera: Double,
     onConfigClick: () -> Unit,
     onToggleMotor: (Boolean) -> Unit
 ) {
@@ -165,13 +181,22 @@ fun MainScreen(
             .padding(16.dp)
     ) {
         Box(modifier = Modifier.fillMaxWidth().padding(bottom = 10.dp)) {
-            Text(
-                text = "📡 SCANNER DE ALERTAS",
-                color = Color(0xFF2EA043),
-                fontSize = 20.sp,
-                fontWeight = FontWeight.Bold,
-                modifier = Modifier.align(Alignment.Center)
-            )
+            Column(modifier = Modifier.align(Alignment.CenterStart)) {
+                Text(
+                    text = "📡 SCANNER DE ALERTAS",
+                    color = Color(0xFF2EA043),
+                    fontSize = 20.sp,
+                    fontWeight = FontWeight.Bold
+                )
+                // Saldo en tiempo real
+                Text(
+                    text = "Saldo Billetera: $${String.format(Locale.US, "%.2f", saldoBilletera)} USDT",
+                    color = Color(0xFFE3B341), // Amarillo oro para destacar el dinero
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.Medium
+                )
+            }
+
             IconButton(onClick = onConfigClick, modifier = Modifier.align(Alignment.CenterEnd)) {
                 Icon(Icons.Default.Settings, "Config", tint = Color(0xFF8B949E))
             }
@@ -183,7 +208,7 @@ fun MainScreen(
             verticalAlignment = Alignment.CenterVertically
         ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("Alertas", color = Color.White)
+                Text("Motor", color = Color.White)
                 Spacer(Modifier.width(8.dp))
                 Switch(
                     checked = motorActivo,
@@ -200,22 +225,76 @@ fun MainScreen(
 
         HorizontalDivider(color = Color(0xFF30363D))
 
-        val scrollState = rememberScrollState()
-
         Box(modifier = Modifier.fillMaxSize().padding(top = 10.dp)) {
-            Column(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .verticalScroll(scrollState)
-                    .background(if (isDebugMode) Color.Black else Color.Transparent)
-                    .padding(8.dp)
-            ) {
+            if (isDebugMode) {
+                val scrollState = rememberScrollState()
                 Text(
-                    text = if (isDebugMode) debugText else alertasText,
-                    color = if (isDebugMode) Color(0xFF00FF00) else Color(0xFF8B949E),
-                    fontSize = if (isDebugMode) 12.sp else 15.sp,
-                    fontFamily = FontFamily.Monospace
+                    text = debugText,
+                    color = Color(0xFF00FF00),
+                    fontSize = 11.sp,
+                    fontFamily = FontFamily.Monospace,
+                    modifier = Modifier.fillMaxSize().verticalScroll(scrollState).background(Color.Black).padding(8.dp)
                 )
+            } else {
+                if (alertas.isEmpty()) {
+                    Text(
+                        text = "Esperando oportunidades...",
+                        color = Color(0xFF8B949E),
+                        modifier = Modifier.align(Alignment.Center)
+                    )
+                } else {
+                    LazyColumn(modifier = Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        items(alertas) { alerta ->
+                            Card(
+                                modifier = Modifier.fillMaxWidth(),
+                                colors = CardDefaults.cardColors(containerColor = Color(0xFF161B22)),
+                                shape = RoundedCornerShape(8.dp)
+                            ) {
+                                Column(modifier = Modifier.padding(16.dp)) {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        // TOKEN GIGANTE EN LA PARTE SUPERIOR
+                                        Text(
+                                            text = alerta.token,
+                                            color = Color.White,
+                                            fontSize = 28.sp,
+                                            fontWeight = FontWeight.ExtraBold
+                                        )
+                                        // HORA EXACTA
+                                        Text(
+                                            text = alerta.hora,
+                                            color = Color(0xFF8B949E),
+                                            fontSize = 14.sp
+                                        )
+                                    }
+
+                                    Spacer(modifier = Modifier.height(4.dp))
+
+                                    // SEÑAL LONG/SHORT DESTACADA CON COLOR
+                                    Text(
+                                        text = "${if (alerta.senal == "LONG") "🟢" else "🔴"} ${alerta.senal}  |  ${alerta.pnlInfo}",
+                                        color = if (alerta.senal == "LONG") Color(0xFF2EA043) else Color(0xFFF85149),
+                                        fontSize = 18.sp,
+                                        fontWeight = FontWeight.Bold
+                                    )
+
+                                    HorizontalDivider(color = Color(0xFF30363D), modifier = Modifier.padding(vertical = 8.dp))
+
+                                    // DETALLES (Riesgo, Margen, etc)
+                                    Text(
+                                        text = alerta.detalles,
+                                        color = Color(0xFFC9D1D9),
+                                        fontSize = 15.sp,
+                                        fontFamily = FontFamily.Monospace
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
     }

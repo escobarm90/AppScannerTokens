@@ -5,61 +5,85 @@ import android.content.Context
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
-import androidx.lifecycle.AndroidViewModel
 import androidx.core.content.edit
+import androidx.lifecycle.AndroidViewModel
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import java.nio.charset.StandardCharsets
+import javax.crypto.Mac
+import javax.crypto.spec.SecretKeySpec
 
 class ConfigViewModel(application: Application) : AndroidViewModel(application) {
-
     private val prefs = application.getSharedPreferences(PrefKeys.PREFS_NAME, Context.MODE_PRIVATE)
 
-    // Estados reactivos para la UI
-    var apiKey by mutableStateOf("")
-    var secretKey by mutableStateOf("")
-    var apalancamiento by mutableStateOf("20")
-    var roiMinimo by mutableStateOf("5.0")
-    var timeframeSeleccionado by mutableStateOf("3m") // Por defecto como tu Service
+    var apiKey by mutableStateOf(prefs.getString(PrefKeys.API_KEY, "") ?: "")
+    var secretKey by mutableStateOf(prefs.getString(PrefKeys.SECRET_KEY, "") ?: "")
+    var timeframe by mutableStateOf(prefs.getString(PrefKeys.TIMEFRAME, "3m") ?: "3m")
+    var billeteraManual by mutableStateOf(prefs.getFloat(PrefKeys.BILLETERA_MANUAL, 20f).toString())
+    var roiMinimo by mutableStateOf(prefs.getFloat(PrefKeys.ROI_MINIMO, 5f).toString())
+    var apalancamiento by mutableStateOf(prefs.getFloat(PrefKeys.APALANCAMIENTO, 20f).toString())
 
-    // Opciones extras basadas en tu Service
-    var billeteraManual by mutableStateOf("20.0")
-    var tamanoPosPct by mutableStateOf("30")
-    var perdidaMaxPct by mutableStateOf("5.0")
+    var tamanoPosPct by mutableStateOf(prefs.getFloat(PrefKeys.TAMANO_POS_PCT, 30f).toString())
+    var perdidaMaxPct by mutableStateOf(prefs.getFloat(PrefKeys.PERDIDA_MAX_PCT, 5f).toString())
+    var tipoMargen by mutableStateOf(prefs.getString(PrefKeys.TIPO_MARGEN, "ISOLATED") ?: "ISOLATED")
 
-    // Lista de temporalidades soportadas (Binance Futures estándar)
-    val opcionesTimeframe = listOf("1m", "3m", "5m", "15m", "30m", "1h", "4h", "1d")
+    var validandoApi by mutableStateOf(false)
+    var mensajeValidacion by mutableStateOf("")
 
-    init {
-        // Cargar valores guardados al iniciar
-        apiKey = prefs.getString(PrefKeys.API_KEY, "") ?: ""
-        secretKey = prefs.getString(PrefKeys.SECRET_KEY, "") ?: ""
+    fun guardarConfiguracion() {
+        prefs.edit {
+            putString(PrefKeys.API_KEY, apiKey.trim())
+            putString(PrefKeys.SECRET_KEY, secretKey.trim())
+            putString(PrefKeys.TIMEFRAME, timeframe.trim())
+            putFloat(PrefKeys.BILLETERA_MANUAL, billeteraManual.toFloatOrNull() ?: 20f)
+            putFloat(PrefKeys.ROI_MINIMO, roiMinimo.toFloatOrNull() ?: 5f)
+            putFloat(PrefKeys.APALANCAMIENTO, apalancamiento.toFloatOrNull() ?: 20f)
 
-        // Convertimos números a String para los TextFields
-        apalancamiento = prefs.getFloat(PrefKeys.APALANCAMIENTO, 20f).toInt().toString()
-        roiMinimo = prefs.getFloat(PrefKeys.ROI_MINIMO, 5f).toString()
-        timeframeSeleccionado = prefs.getString(PrefKeys.TIMEFRAME, "3m") ?: "3m"
-
-        billeteraManual = prefs.getFloat(PrefKeys.BILLETERA_MANUAL, 20f).toString()
-        tamanoPosPct = prefs.getFloat(PrefKeys.TAMANO_POS_PCT, 30f).toInt().toString()
-        perdidaMaxPct = prefs.getFloat(PrefKeys.PERDIDA_MAX_PCT, 5f).toString()
+            putFloat(PrefKeys.TAMANO_POS_PCT, tamanoPosPct.toFloatOrNull() ?: 30f)
+            putFloat(PrefKeys.PERDIDA_MAX_PCT, perdidaMaxPct.toFloatOrNull() ?: 5f)
+            putString(PrefKeys.TIPO_MARGEN, tipoMargen)
+        }
     }
 
-    fun guardarConfiguracion(): Boolean {
-        return try {
-            prefs.edit {
-                putString(PrefKeys.API_KEY, apiKey.trim())
-                putString(PrefKeys.SECRET_KEY, secretKey.trim())
-
-                // Validación básica antes de guardar números
-                putFloat(PrefKeys.APALANCAMIENTO, apalancamiento.toFloatOrNull() ?: 20f)
-                putFloat(PrefKeys.ROI_MINIMO, roiMinimo.toFloatOrNull() ?: 5f)
-                putString(PrefKeys.TIMEFRAME, timeframeSeleccionado)
-
-                putFloat(PrefKeys.BILLETERA_MANUAL, billeteraManual.toFloatOrNull() ?: 20f)
-                putFloat(PrefKeys.TAMANO_POS_PCT, tamanoPosPct.toFloatOrNull() ?: 30f)
-                putFloat(PrefKeys.PERDIDA_MAX_PCT, perdidaMaxPct.toFloatOrNull() ?: 5f)
-            }
-            true
-        } catch (e: Exception) {
-            false
+    fun validarCredenciales() {
+        if (apiKey.isBlank() || secretKey.isBlank()) {
+            mensajeValidacion = "⚠️ Ingresa ambas claves primero"
+            return
         }
+        validandoApi = true
+        mensajeValidacion = "Validando conexión con Binance..."
+
+        Thread {
+            try {
+                val client = OkHttpClient()
+                val timestamp = System.currentTimeMillis()
+                val queryString = "timestamp=$timestamp"
+
+                val sha256HMAC = Mac.getInstance("HmacSHA256")
+                val secretKeySpec = SecretKeySpec(secretKey.trim().toByteArray(StandardCharsets.UTF_8), "HmacSHA256")
+                sha256HMAC.init(secretKeySpec)
+                val hash = sha256HMAC.doFinal(queryString.toByteArray(StandardCharsets.UTF_8))
+                val signature = hash.joinToString("") { "%02x".format(it) }
+
+                val url = "https://fapi.binance.com/fapi/v2/balance?$queryString&signature=$signature"
+                val request = Request.Builder()
+                    .url(url)
+                    .addHeader("X-MBX-APIKEY", apiKey.trim())
+                    .build()
+
+                client.newCall(request).execute().use { response ->
+                    if (response.isSuccessful) {
+                        mensajeValidacion = "✅ API Validada: Conectado a Binance"
+                        guardarConfiguracion() // Guardamos si es correcta
+                    } else {
+                        mensajeValidacion = "❌ Error: API Key o Secret inválidos"
+                    }
+                }
+            } catch (e: Exception) {
+                mensajeValidacion = "❌ Error de red: ${e.message}"
+            } finally {
+                validandoApi = false
+            }
+        }.start()
     }
 }
