@@ -1,6 +1,5 @@
 package com.mauri.appscannertokens
 
-import android.app.Activity
 import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
@@ -26,7 +25,7 @@ import java.util.Locale
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun ConfigScreen(viewModel: ConfigViewModel) {
+fun ConfigScreen(viewModel: ConfigViewModel, onBack: () -> Unit) {
     val context = LocalContext.current
     val scrollState = rememberScrollState()
 
@@ -38,14 +37,13 @@ fun ConfigScreen(viewModel: ConfigViewModel) {
         TopAppBar(
             title = { Text("Configuración", color = Color.White) },
             navigationIcon = {
-                IconButton(onClick = { (context as? Activity)?.finish() }) {
+                IconButton(onClick = onBack) {
                     Icon(Icons.Default.ArrowBack, contentDescription = "Atrás", tint = Color.White)
                 }
             },
             colors = TopAppBarDefaults.topAppBarColors(containerColor = Color(0xFF161B22))
         )
 
-        // Todo el contenido dentro de una columna scrolleable
         Column(
             modifier = Modifier
                 .fillMaxSize()
@@ -62,7 +60,7 @@ fun ConfigScreen(viewModel: ConfigViewModel) {
                 shape = RoundedCornerShape(8.dp)
             ) {
                 Text(
-                    text = "💡 Saldo de la billetera: Puede crear una Api Key en su cuenta de Binance habilitando solo el permiso de “Enable Reading” para que la aplicación sepa en tiempo real el saldo exacto de su billetera y pueda ser más preciso con los cálculos, pero al mismo tiempo sea seguro en cuanto a que lo único que puede hacer con esa API es leer el saldo, no corre ningún riesgo.",
+                    text = "Saldo de la billetera : Puede crear una Api Key en su cuenta de binance unicamente habilitando solo el permiso de “Enable Reading” para que la aplicacion sepa en tiempo real el saldo exacto de su billetera y pueda ser mas preciso con los calculos pero al mismo tiempo sea seguro en cuanto a que lo unico que puede hacer con esa api es leer el saldo, no corre ningun riesgo.",
                     color = Color(0xFF8B949E),
                     fontSize = 13.sp,
                     modifier = Modifier.padding(12.dp)
@@ -110,62 +108,56 @@ fun ConfigScreen(viewModel: ConfigViewModel) {
 
             Text("Estrategia y Riesgo", color = Color(0xFF2EA043), fontWeight = FontWeight.Bold, fontSize = 18.sp)
 
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                DropdownTimeframe(
-                    selected = viewModel.timeframe,
-                    onSelectedChange = { viewModel.timeframe = it },
-                    modifier = Modifier.weight(1f)
-                )
+            DropdownTimeframe(
+                selected = viewModel.timeframe,
+                onSelectedChange = { viewModel.timeframe = it },
+                modifier = Modifier.fillMaxWidth()
+            )
 
-                StepperField(
-                    label = "Apalancamiento (x)",
-                    value = viewModel.apalancamiento,
-                    onValueChange = { viewModel.apalancamiento = it },
-                    step = 1f,
-                    min = 1f,
-                    modifier = Modifier.weight(1f)
-                )
-            }
+            StepperField(
+                label = "Apalancamiento (x)",
+                value = viewModel.apalancamiento,
+                onValueChange = { viewModel.apalancamiento = it },
+                step = 1f,
+                min = 1f,
+                modifier = Modifier.fillMaxWidth()
+            )
 
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                StepperField(
-                    label = "% Billetera (Margen)",
-                    value = viewModel.tamanoPosPct,
-                    onValueChange = { viewModel.tamanoPosPct = it },
-                    step = 1f,
-                    min = 1f,
-                    modifier = Modifier.weight(1f)
-                )
+            StepperField(
+                label = "% Billetera a Usar (Margen)",
+                value = viewModel.tamanoPosPct,
+                onValueChange = { viewModel.tamanoPosPct = it },
+                step = 1f,
+                min = 1f,
+                modifier = Modifier.fillMaxWidth()
+            )
 
-                StepperField(
-                    label = "% Pérdida Máx (SL)",
-                    value = viewModel.perdidaMaxPct,
-                    onValueChange = { viewModel.perdidaMaxPct = it },
-                    step = 0.5f,
-                    min = 0.5f,
-                    modifier = Modifier.weight(1f)
-                )
-            }
+            StepperField(
+                label = "% Pérdida Max a Asumir (SL)",
+                value = viewModel.perdidaMaxPct,
+                onValueChange = { viewModel.perdidaMaxPct = it },
+                step = 0.5f,
+                min = 0.5f,
+                modifier = Modifier.fillMaxWidth()
+            )
 
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                OutlinedTextField(
-                    value = viewModel.billeteraManual,
-                    onValueChange = { viewModel.billeteraManual = it },
-                    label = { Text("Billetera Simulada ($)", fontSize = 12.sp) },
-                    modifier = Modifier.weight(1f),
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                    colors = OutlinedTextFieldDefaults.colors(focusedTextColor = Color.White, unfocusedTextColor = Color.Gray)
-                )
+            StepperField(
+                label = "ROI Mínimo (%)",
+                value = viewModel.roiMinimo,
+                onValueChange = { viewModel.roiMinimo = it },
+                step = 1f,
+                min = 1f,
+                modifier = Modifier.fillMaxWidth()
+            )
 
-                StepperField(
-                    label = "ROI Mínimo (%)",
-                    value = viewModel.roiMinimo,
-                    onValueChange = { viewModel.roiMinimo = it },
-                    step = 1f,
-                    min = 1f,
-                    modifier = Modifier.weight(1f)
-                )
-            }
+            OutlinedTextField(
+                value = viewModel.billeteraManual,
+                onValueChange = { viewModel.billeteraManual = it },
+                label = { Text("Billetera Simulada ($)", fontSize = 12.sp) },
+                modifier = Modifier.fillMaxWidth(),
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                colors = OutlinedTextFieldDefaults.colors(focusedTextColor = Color.White, unfocusedTextColor = Color.Gray)
+            )
 
             Text("Tipo de Margen", color = Color.White, fontSize = 14.sp)
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -195,7 +187,7 @@ fun ConfigScreen(viewModel: ConfigViewModel) {
                 onClick = {
                     viewModel.guardarConfiguracion()
                     Toast.makeText(context, "Configuración guardada", Toast.LENGTH_SHORT).show()
-                    (context as? Activity)?.finish()
+                    onBack()
                 },
                 modifier = Modifier.fillMaxWidth().height(50.dp),
                 colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2EA043))
@@ -203,12 +195,11 @@ fun ConfigScreen(viewModel: ConfigViewModel) {
                 Text("Guardar y Volver", fontSize = 16.sp, fontWeight = FontWeight.Bold, color = Color.White)
             }
 
-            Spacer(modifier = Modifier.height(30.dp)) // Espacio final extra para scrollear cómodo
+            Spacer(modifier = Modifier.height(30.dp))
         }
     }
 }
 
-// COMPONENTE: Menú desplegable para el Timeframe
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun DropdownTimeframe(
@@ -217,8 +208,7 @@ fun DropdownTimeframe(
     modifier: Modifier = Modifier
 ) {
     var expanded by remember { mutableStateOf(false) }
-    // Nota: Binance no soporta 10m en los WebSockets, por eso usamos 15m.
-    val options = listOf("3m", "5m", "15m", "30m", "1h")
+    val options = listOf("3m", "5m", "10m", "15m", "30m")
 
     ExposedDropdownMenuBox(
         expanded = expanded,
@@ -256,7 +246,6 @@ fun DropdownTimeframe(
     }
 }
 
-// COMPONENTE: Botones de + y - para campos numéricos
 @Composable
 fun StepperField(
     label: String,
@@ -282,7 +271,7 @@ fun StepperField(
                     onValueChange(String.format(Locale.US, "%.1f", newVal).replace(".0", ""))
                 },
                 contentPadding = PaddingValues(0.dp),
-                modifier = Modifier.width(40.dp)
+                modifier = Modifier.width(50.dp)
             ) {
                 Text("-", color = Color(0xFF2EA043), fontSize = 24.sp, fontWeight = FontWeight.Bold)
             }
@@ -306,7 +295,7 @@ fun StepperField(
                     onValueChange(String.format(Locale.US, "%.1f", newVal).replace(".0", ""))
                 },
                 contentPadding = PaddingValues(0.dp),
-                modifier = Modifier.width(40.dp)
+                modifier = Modifier.width(50.dp)
             ) {
                 Text("+", color = Color(0xFF2EA043), fontSize = 24.sp, fontWeight = FontWeight.Bold)
             }
