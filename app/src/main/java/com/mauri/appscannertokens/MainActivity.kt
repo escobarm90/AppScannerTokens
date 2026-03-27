@@ -1,7 +1,6 @@
 package com.mauri.appscannertokens
 
 import android.Manifest
-import androidx.activity.compose.setContent
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
@@ -12,6 +11,7 @@ import android.os.Build
 import android.os.Bundle
 import android.widget.Toast
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.setContent
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -29,20 +29,14 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.setValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
 import androidx.core.content.edit
 
 class MainActivity : ComponentActivity() {
 
     private lateinit var prefs: SharedPreferences
 
-    // Usamos estados de Compose a nivel de clase para que la UI reaccione
     private var alertasText by mutableStateOf("Esperando oportunidades...\n")
     private var debugText by mutableStateOf("Iniciando motor debug...\n")
-    // Agregamos el estado del switch aquí para que sea la "fuente de verdad"
     private var motorActivo by mutableStateOf(false)
 
     private val receptorAlertas = object : BroadcastReceiver() {
@@ -82,23 +76,20 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
 
         prefs = getSharedPreferences("TradingPrefs", MODE_PRIVATE)
-
-        // Sincronizamos el estado inicial del motor
         motorActivo = prefs.getBoolean("recibir_alertas", false)
 
-        // Permisos para Android 13+
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             if (ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
                 ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.POST_NOTIFICATIONS), 101)
             }
         }
 
-        // Registro de receptores (Usando registerReceiver nativo o ContextCompat)
         val filterAlertas = IntentFilter("NUEVA_ALERTA")
         val filterDebug = IntentFilter("NUEVO_DEBUG")
 
-        registerReceiver(receptorAlertas, filterAlertas, RECEIVER_NOT_EXPORTED)
-        registerReceiver(receptorDebug, filterDebug, RECEIVER_NOT_EXPORTED)
+        // Corrección: Usamos ContextCompat para evitar el error de importación del RECEIVER_NOT_EXPORTED
+        ContextCompat.registerReceiver(this, receptorAlertas, filterAlertas, ContextCompat.RECEIVER_NOT_EXPORTED)
+        ContextCompat.registerReceiver(this, receptorDebug, filterDebug, ContextCompat.RECEIVER_NOT_EXPORTED)
 
         if (motorActivo) iniciarMotor()
 
@@ -107,9 +98,10 @@ class MainActivity : ComponentActivity() {
                 MainScreen(
                     alertasText = alertasText,
                     debugText = debugText,
-                    motorActivo = motorActivo, // Pasamos el estado real
+                    motorActivo = motorActivo,
                     onConfigClick = {
-                        startActivity(Intent(this, ConfigActivity::class.java))
+                        // Corrección: Forzamos el contexto explícito
+                        startActivity(Intent(this@MainActivity, ConfigActivity::class.java))
                     },
                     onToggleMotor = { isChecked ->
                         motorActivo = isChecked
@@ -117,10 +109,10 @@ class MainActivity : ComponentActivity() {
 
                         if (isChecked) {
                             iniciarMotor()
-                            Toast.makeText(this, "Radar Binance Activado 🚀", Toast.LENGTH_SHORT).show()
+                            Toast.makeText(this@MainActivity, "Radar Binance Activado 🚀", Toast.LENGTH_SHORT).show()
                         } else {
                             detenerMotor()
-                            Toast.makeText(this, "Radar Apagado 💤", Toast.LENGTH_SHORT).show()
+                            Toast.makeText(this@MainActivity, "Radar Apagado 💤", Toast.LENGTH_SHORT).show()
                         }
                     }
                 )
@@ -150,11 +142,10 @@ class MainActivity : ComponentActivity() {
 fun MainScreen(
     alertasText: String,
     debugText: String,
-    motorActivo: Boolean, // Ahora viene de la Activity
+    motorActivo: Boolean,
     onConfigClick: () -> Unit,
     onToggleMotor: (Boolean) -> Unit
 ) {
-    // Solo el modo debug es local a la pantalla
     var isDebugMode by remember { mutableStateOf(false) }
 
     Column(
@@ -163,7 +154,6 @@ fun MainScreen(
             .background(Color(0xFF0D1117))
             .padding(16.dp)
     ) {
-        // Cabecera
         Box(modifier = Modifier.fillMaxWidth().padding(bottom = 10.dp)) {
             Text(
                 text = "📡 SCANNER DE ALERTAS",
@@ -177,7 +167,6 @@ fun MainScreen(
             }
         }
 
-        // Switches de control
         Row(
             modifier = Modifier.fillMaxWidth().padding(bottom = 15.dp),
             horizontalArrangement = Arrangement.SpaceEvenly,
@@ -201,7 +190,6 @@ fun MainScreen(
 
         HorizontalDivider(color = Color(0xFF30363D))
 
-        // Contenedor de Texto (Scrollable)
         val scrollState = rememberScrollState()
 
         Box(modifier = Modifier.fillMaxSize().padding(top = 10.dp)) {
