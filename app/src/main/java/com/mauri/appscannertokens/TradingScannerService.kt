@@ -41,7 +41,6 @@ import javax.crypto.Mac
 import javax.crypto.spec.SecretKeySpec
 import kotlin.math.abs
 
-// Estructura para almacenar temporalmente los datos del Order Flow
 data class OrderFlowData(
     val spread: Double,
     val bidQty: Double,
@@ -66,7 +65,6 @@ class TradingScannerService : Service() {
     private val mercado: MutableMap<String, BarSeries> = ConcurrentHashMap()
     private val ultimaAlertaPorToken = ConcurrentHashMap<String, Long>()
 
-    // Caché de Billetera para no saturar la API
     private var ultimoSaldoCache: Double = 0.0
     private var ultimaVezSaldoActualizado: Long = 0L
 
@@ -102,7 +100,6 @@ class TradingScannerService : Service() {
         } catch (e: Exception) {
             enviarDebug("🚨 CRASH PREVENIDO en onStartCommand: ${e.message}")
         }
-
         return START_STICKY
     }
 
@@ -144,7 +141,6 @@ class TradingScannerService : Service() {
                     val symbol = t.get("symbol").asString
                     val volume = t.get("quoteVolume").asDouble
 
-                    // Ignoramos BTC, ETH y Stablecoins
                     if (symbol.endsWith("USDT") &&
                         !symbol.contains("BTCUSDT") &&
                         !symbol.contains("ETHUSDT") &&
@@ -155,7 +151,6 @@ class TradingScannerService : Service() {
                     }
                 }
 
-                // Ordenar por volatilidad de 24h y agarrar los top 50
                 validTickers.sortByDescending { abs(it.get("priceChangePercent").asDouble) }
                 validTickers.take(TOP_VOLATILES).map { it.get("symbol").asString }
             }
@@ -173,7 +168,6 @@ class TradingScannerService : Service() {
             client.newCall(request).execute().use { response ->
                 val json = response.body?.string() ?: return
                 val klines = JsonParser.parseString(json).asJsonArray
-
                 val velas = mutableListOf<org.ta4j.core.Bar>()
 
                 for (elem in klines) {
@@ -197,7 +191,11 @@ class TradingScannerService : Service() {
                     )
                 }
 
-                val serie = BaseBarSeriesBuilder().withName(symbol).withMaxBarCount(250).withBars(velas).build()
+                val serie = BaseBarSeriesBuilder()
+                    .withName(symbol)
+                    .withMaxBarCount(250)
+                    .withBars(velas)
+                    .build()
                 mercado[symbol] = serie
             }
         } catch (e: Exception) {
@@ -262,7 +260,6 @@ class TradingScannerService : Service() {
 
     private fun calcularOrderFlow(symbol: String): OrderFlowData? {
         try {
-            // L2 Orderbook - Profundidad
             val reqOb = Request.Builder().url("https://fapi.binance.com/fapi/v1/depth?symbol=$symbol&limit=5").build()
             val resOb = client.newCall(reqOb).execute()
             if (!resOb.isSuccessful) return null
@@ -281,7 +278,6 @@ class TradingScannerService : Service() {
             val bestAsk = asks.get(0).asJsonArray.get(0).asDouble
             val spread = if (bestBid > 0) ((bestAsk - bestBid) / bestBid) * 100 else 99.0
 
-            // Flujo de Trades Recientes (Tape Reading)
             val reqTrades = Request.Builder().url("https://fapi.binance.com/fapi/v1/trades?symbol=$symbol&limit=20").build()
             val resTrades = client.newCall(reqTrades).execute()
             if (!resTrades.isSuccessful) return null
@@ -294,7 +290,7 @@ class TradingScannerService : Service() {
                 val qty = trade.get("qty").asDouble
                 val isBuyerMaker = trade.get("isBuyerMaker").asBoolean
                 volTotal += qty
-                if (!isBuyerMaker) volCompras += qty // Comprador Taker (agresivo)
+                if (!isBuyerMaker) volCompras += qty
             }
             val pctCompras = if (volTotal > 0) (volCompras / volTotal) * 100 else 50.0
 
@@ -389,14 +385,13 @@ class TradingScannerService : Service() {
         val volumenActual = volumenInd.getValue(ultima).doubleValue()
         val volPromedio = volSma.getValue(ultima).doubleValue()
 
-        val valorEma200 = ema200.getValue(ultima).doubleValue()
         val valorEma7 = ema7.getValue(ultima).doubleValue()
         val ema7Previa = ema7.getValue(previa).doubleValue()
         val valorBbLower = bbLower.getValue(ultima).doubleValue()
         val valorBbUpper = bbUpper.getValue(ultima).doubleValue()
+        val valorEma200 = ema200.getValue(ultima).doubleValue()
         val valorAtr = atr.getValue(ultima).doubleValue()
 
-        // 1. Análisis de Volatilidad Relativa
         val atrP = if (precioActual > 0) (valorAtr / precioActual) * 100 else 0.0
         val volRatio = if (volPromedio > 0) volumenActual / volPromedio else 0.0
 
@@ -409,7 +404,6 @@ class TradingScannerService : Service() {
         val velaVerde = precioActual > precioApertura
         val velaRoja = precioActual < precioApertura
 
-        // 2. Patrones Técnicos Reversión a la Media
         val toqueBbInf = (minPrevio <= bbLowerPrevio) || (precioMinimo <= valorBbLower)
         val recuperaEma7 = (cierrePrevio < ema7Previa) && (precioActual > valorEma7)
 
@@ -420,22 +414,21 @@ class TradingScannerService : Service() {
         if (toqueBbInf && recuperaEma7 && velaVerde) senalTecnica = "LONG"
         else if (toqueBbSup && pierdeEma7 && velaRoja) senalTecnica = "SHORT"
 
-        // 3. Variables de Riesgo del Usuario (Actualizadas en tiempo real)
         val billeteraReal = obtenerSaldoBilleteraUSDT()
-        val P = prefs.getFloat(PrefKeys.TAMANO_POS_PCT, 10.0f) / 100.0 // Margen
-        val L = prefs.getFloat(PrefKeys.APALANCAMIENTO, 20.0f).toDouble() // Leverage
-        val R = prefs.getFloat(PrefKeys.PERDIDA_MAX_PCT, 2.0f) / 100.0 // Stop Loss Riesgo Total
+        val P = prefs.getFloat(PrefKeys.TAMANO_POS_PCT, 10.0f) / 100.0
+        val L = prefs.getFloat(PrefKeys.APALANCAMIENTO, 20.0f).toDouble()
+        val R = prefs.getFloat(PrefKeys.PERDIDA_MAX_PCT, 2.0f) / 100.0
         val roiMinimo = prefs.getFloat(PrefKeys.ROI_MINIMO, 5.0f).toDouble()
         val tipoMargen = prefs.getString(PrefKeys.TIPO_MARGEN, "ISOLATED") ?: "ISOLATED"
-        val RR = 2.0 // Ratio Riesgo Beneficio (Fijo para TP matemático)
+        val RR = 2.0
 
         val margenPorOperacion = billeteraReal * P
-
-        // Cálculo del ATR Mínimo necesario matemáticamente para alcanzar el ROI esperado
         val atrMinimoRequerido = (roiMinimo + (L * 0.1)) / (L * 2.0)
 
         var razonRechazo = ""
         var infoOrderFlow = "No evaluado (Sin señal)"
+        var printMuro = "Muro Orderbook:  No evaluado (Sin señal)"
+        var printFlujo = "Flujo Trades:    No evaluado (Sin señal)"
 
         if (senalTecnica != "NEUTRAL") {
             val tiempoActual = System.currentTimeMillis()
@@ -444,27 +437,27 @@ class TradingScannerService : Service() {
             if ((tiempoActual - tiempoUltima) < 60_000L) {
                 razonRechazo = "RECHAZADO - EN COOLDOWN (1 MIN)"
             } else if (volRatio <= VOL_RATIO_MINIMO) {
-                razonRechazo = String.format(Locale.US, "RECHAZADO - VOLUMEN %.2fx <= %.2fx", volRatio, VOL_RATIO_MINIMO)
+                razonRechazo = String.format(Locale.US, "RECHAZADO - VOL RATIO %.2fx <= %.2fx", volRatio, VOL_RATIO_MINIMO)
             } else if (atrP < atrMinimoRequerido) {
                 razonRechazo = String.format(Locale.US, "RECHAZADO - MERCADO PLANO (ATR: %.2f%% < Req: %.2f%%)", atrP, atrMinimoRequerido)
             } else {
-                // 4. Confirmación por Order Flow y Liquidez
                 val orderFlow = calcularOrderFlow(symbol)
 
                 if (orderFlow == null) {
-                    razonRechazo = "RECHAZADO - ERROR LECTURA API BINANCE"
+                    razonRechazo = "RECHAZADO - ERROR API BINANCE"
                 } else {
-                    infoOrderFlow = String.format(Locale.US, "Bid: %.1f / Ask: %.1f | Fuerza Compra: %.1f%%", orderFlow.bidQty, orderFlow.askQty, orderFlow.pctCompras)
+                    printMuro = String.format(Locale.US, "Muro Orderbook:  Bid %.1f / Ask %.1f", orderFlow.bidQty, orderFlow.askQty)
+                    printFlujo = String.format(Locale.US, "Flujo Trades:    %.2f%% Fuerza Compradora", orderFlow.pctCompras)
+                    infoOrderFlow = String.format(Locale.US, "Bid: %.1f / Ask: %.1f | Fuerza: %.1f%%", orderFlow.bidQty, orderFlow.askQty, orderFlow.pctCompras)
 
                     if (orderFlow.spread > SPREAD_MAXIMO) {
-                        razonRechazo = String.format(Locale.US, "RECHAZADO - SPREAD ALTO (%.3f%% > %.2f%%)", orderFlow.spread, SPREAD_MAXIMO)
+                        razonRechazo = String.format(Locale.US, "RECHAZADO - SPREAD %.3f%% > %.2f%%", orderFlow.spread, SPREAD_MAXIMO)
                     } else if (senalTecnica == "LONG" && orderFlow.pctCompras < 45.0) {
-                        razonRechazo = String.format(Locale.US, "RECHAZADO LONG - FALTAN COMPRADORES (%.1f%% < 45%%)", orderFlow.pctCompras)
+                        razonRechazo = "RECHAZADO LONG - FALTA FUERZA DE DIRECCIÓN"
                     } else if (senalTecnica == "SHORT" && orderFlow.pctCompras > 55.0) {
-                        razonRechazo = String.format(Locale.US, "RECHAZADO SHORT - FALTAN VENDEDORES (%.1f%% > 55%%)", orderFlow.pctCompras)
+                        razonRechazo = "RECHAZADO SHORT - FALTA FUERZA DE DIRECCIÓN"
                     } else {
-                        // 5. Aprobación y Aplicación Estricta de Fórmulas Matemáticas
-                        razonRechazo = "APROBADO ✅"
+                        razonRechazo = "¡REVERSIÓN $senalTecnica CONFIRMADA! ENVIANDO A ALERTAS..."
                         ultimaAlertaPorToken[symbol] = tiempoActual
                         val horaExacta = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date(tiempoActual))
 
@@ -472,7 +465,6 @@ class TradingScannerService : Service() {
                         val sl: Double
                         val tp: Double
 
-                        // FÓRMULA DE RIESGO: Adaptada a LONG y SHORT
                         if (senalTecnica == "LONG") {
                             sl = PE * (1.0 - (R / (P * L)))
                             tp = PE + (PE - sl) * RR
@@ -491,24 +483,28 @@ class TradingScannerService : Service() {
                         val pnlNeto = gananciaBrutaUSDT - (feeEntrada + feeSalida)
                         val roi = if (margenPorOperacion > 0) (pnlNeto / margenPorOperacion) * 100 else 0.0
 
-                        val pnlInfoStr = "PNL: $${String.format(Locale.US, "%.2f", pnlNeto)} USDT"
+                        // AQUÍ PREPARAMOS LOS TEXTOS PARA MANDAR A LA TARJETA
+                        val strMargen = String.format(Locale.US, "%.2f", margenPorOperacion)
+                        val strApalancamiento = "${L.toInt()}x ($tipoMargen)"
+                        val strPe = String.format(Locale.US, "%.6f", PE)
+                        val strTp = String.format(Locale.US, "%.6f", tp)
+                        val strSl = String.format(Locale.US, "%.6f", sl)
+                        val strPnl = String.format(Locale.US, "%.2f", pnlNeto)
+                        val strRoi = String.format(Locale.US, "%.2f", roi)
 
-                        val cuerpoPush = """
-                            ⚡ APALANCAMIENTO: ${L.toInt()}x ($tipoMargen)
-                            💵 ENTRADA: ${String.format(Locale.US, "%.4f", PE)}
-                            ✅ TP: ${String.format(Locale.US, "%.4f", tp)}
-                            ❌ SL: ${String.format(Locale.US, "%.4f", sl)}
-                            💰 MARGEN: $${String.format(Locale.US, "%.2f", margenPorOperacion)} USDT
-                            🔥 ROI EST: ${String.format(Locale.US, "%.2f%%", roi)}
-                        """.trimIndent()
-
+                        // AQUÍ LOS ENVIAMOS (Asegúrate de tener este bloque exacto)
                         val intent = Intent("NUEVA_ALERTA")
                         intent.setPackage(packageName)
                         intent.putExtra("token", symbol)
                         intent.putExtra("senal", senalTecnica)
                         intent.putExtra("hora", horaExacta)
-                        intent.putExtra("pnl_info", pnlInfoStr)
-                        intent.putExtra("cuerpo", cuerpoPush)
+                        intent.putExtra("precio", strPe)
+                        intent.putExtra("margen", strMargen)
+                        intent.putExtra("apalancamiento", strApalancamiento)
+                        intent.putExtra("tp", strTp)
+                        intent.putExtra("sl", strSl)
+                        intent.putExtra("pnl_neto", strPnl)
+                        intent.putExtra("roi", strRoi)
                         sendBroadcast(intent)
 
                         hacerVibrar(senalTecnica)
@@ -517,21 +513,20 @@ class TradingScannerService : Service() {
             }
         }
 
-        // Formato vertical estricto para el Cmd Scanner
         val debugMsj = """
-            ╭────────────────────────────────────────╮
-            │ 🪙 TOKEN: $symbol (USDT)
-            │ 💵 PRECIO ACTUAL: ${String.format(Locale.US, "%.6f", precioActual)}
-            │ 📊 RSI (14): ${String.format(Locale.US, "%.2f", rsi.getValue(ultima).doubleValue())}
-            │ 📈 EMA 7: ${String.format(Locale.US, "%.6f", valorEma7)}
-            │ 📉 EMA 200: ${String.format(Locale.US, "%.6f", valorEma200)}
-            │ 📏 ATR (%): ${String.format(Locale.US, "%.3f%%", atrP)} (Mín Req: ${String.format(Locale.US, "%.3f%%", atrMinimoRequerido)})
-            │ 🎢 BB L/U: ${String.format(Locale.US, "%.6f", valorBbLower)} / ${String.format(Locale.US, "%.6f", valorBbUpper)}
-            │ 🌊 VOL RATIO: ${String.format(Locale.US, "%.2fx", volRatio)}
-            │ 🚀 ORDER FLOW: $infoOrderFlow
-            │ 🎯 SEÑAL TÉCNICA: $senalTecnica
-            │ 🛡️ ESTADO: ${if (razonRechazo.isEmpty()) "ESPERANDO CONFIRMACIÓN" else razonRechazo}
-            ╰────────────────────────────────────────╯
+            
+            --- ANALIZANDO: $symbol ---
+            Precio Actual:   ${String.format(Locale.US, "%.6f", precioActual)}
+            RSI (14):        ${String.format(Locale.US, "%.2f", rsi.getValue(ultima).doubleValue())}
+            EMA 7:           ${String.format(Locale.US, "%.6f", valorEma7)}
+            EMA 200:         ${String.format(Locale.US, "%.6f", valorEma200)}
+            ATR (%):         ${String.format(Locale.US, "%.3f", atrP)}%
+            BB UPPER:        ${String.format(Locale.US, "%.6f", valorBbUpper)}
+            BB LOWER:        ${String.format(Locale.US, "%.6f", valorBbLower)}
+            Volumen Ratio:   ${String.format(Locale.US, "%.2f", volRatio)}x
+            $printMuro
+            $printFlujo
+            ESTADO: ${if (razonRechazo.isEmpty()) "SIN SEÑAL TÉCNICA CLARA" else razonRechazo}
         """.trimIndent()
 
         enviarDebug(debugMsj)
@@ -581,6 +576,9 @@ class TradingScannerService : Service() {
         "5m" -> Duration.ofMinutes(5)
         "15m" -> Duration.ofMinutes(15)
         "30m" -> Duration.ofMinutes(30)
+        "1h" -> Duration.ofHours(1)
+        "4h" -> Duration.ofHours(4)
+        "1d" -> Duration.ofDays(1)
         else -> Duration.ofMinutes(3)
     }
 }

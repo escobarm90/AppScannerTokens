@@ -42,17 +42,22 @@ fun AlertCard(alerta: AlertaData) {
         Column(modifier = Modifier.padding(16.dp)) {
 
             // FILA 1: TOKEN GIGANTE Y HORA
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
                 Text(
                     text = alerta.token,
                     color = Color.White,
-                    fontSize = 28.sp,
+                    fontSize = 26.sp,
                     fontWeight = FontWeight.ExtraBold
                 )
                 Text(
                     text = alerta.hora,
                     color = Color(0xFF8B949E),
-                    fontSize = 14.sp
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.Medium
                 )
             }
 
@@ -62,36 +67,49 @@ fun AlertCard(alerta: AlertaData) {
             Text(
                 text = "${if (isLong) "🟢" else "🔴"} ${alerta.senal}  |  PNL: $${alerta.pnlNeto} USDT",
                 color = mainColor,
-                fontSize = 18.sp,
+                fontSize = 17.sp,
                 fontWeight = FontWeight.Bold
             )
 
             HorizontalDivider(color = Color(0xFF30363D), modifier = Modifier.padding(vertical = 12.dp))
 
-            // FILA 3: CUADRÍCULA DE DATOS EXACTA
+            // FILA 3: CUADRÍCULA DE DATOS (Uno abajo del otro)
             Row(modifier = Modifier.fillMaxWidth()) {
                 // Columna Izquierda
-                Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    DataRow("ENTRADA:", alerta.precio)
-                    DataRow("TP:", alerta.tp)
-                    DataRow("SL:", alerta.sl)
+                Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    DataItem("PRECIO ENTRADA", alerta.precio)
+                    DataItem("TAKE PROFIT", alerta.tp, Color(0xFF2EA043))
+                    DataItem("STOP LOSS", alerta.sl, Color(0xFFF85149))
                 }
 
                 // Columna Derecha
-                Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    DataRow("MARGEN:", "$${alerta.margen} USDT")
-                    DataRow("APALANCAMIENTO:", "${alerta.apalancamiento}")
-                    DataRow("ROI EST:", "${alerta.roi}%")
+                Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    DataItem("MARGEN", "$${alerta.margen} USDT")
+                    DataItem("APALANCAMIENTO", alerta.apalancamiento)
+                    DataItem("ROI ESTIMADO", "${alerta.roi}%", mainColor)
                 }
             }
         }
     }
 }
 
+// Nuevo componente diseñado para apilar el título y el valor verticalmente
 @Composable
-fun DataRow(label: String, value: String) {
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        Text(text = label, color = Color(0xFF8B949E), fontSize = 13.sp, modifier = Modifier.width(115.dp))
-        Text(text = value, color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+fun DataItem(label: String, value: String, valueColor: Color = Color.White) {
+    Column {
+        Text(
+            text = label,
+            color = Color(0xFF8B949E),
+            fontSize = 11.sp,
+            fontWeight = FontWeight.SemiBold,
+            letterSpacing = 0.5.sp
+        )
+        Spacer(modifier = Modifier.height(2.dp))
+        Text(
+            text = value.ifEmpty { "Calculando..." },
+            color = valueColor,
+            fontSize = 16.sp,
+            fontWeight = FontWeight.Bold
+        )
     }
 }
