@@ -11,7 +11,6 @@
   <component name="ChangeListManager">
     <list default="true" id="f47cbd80-7e7b-4408-8a49-fc9584e2fa18" name="Changes" comment="Version 2.0 funcionando Estetica Mejorada, Logica de negocio arreglada">
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/app/src/main/java/com/mauri/appscannertokens/AlertCard.kt" beforeDir="false" afterPath="$PROJECT_DIR$/app/src/main/java/com/mauri/appscannertokens/AlertCard.kt" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/app/src/main/java/com/mauri/appscannertokens/TradingScannerService.kt" beforeDir="false" afterPath="$PROJECT_DIR$/app/src/main/java/com/mauri/appscannertokens/TradingScannerService.kt" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
@@ -376,7 +375,15 @@
       <option name="project" value="LOCAL" />
       <updated>1774649173265</updated>
     </task>
-    <option name="localTasksCounter" value="17" />
+    <task id="LOCAL-00017" summary="Version 2.0 funcionando Estetica Mejorada, Logica de negocio arreglada">
+      <option name="closed" value="true" />
+      <created>1774691824672</created>
+      <option name="number" value="00017" />
+      <option name="presentableId" value="LOCAL-00017" />
+      <option name="project" value="LOCAL" />
+      <updated>1774691824673</updated>
+    </task>
+    <option name="localTasksCounter" value="18" />
     <servers />
   </component>
   <component name="Vcs.Log.Tabs.Properties">

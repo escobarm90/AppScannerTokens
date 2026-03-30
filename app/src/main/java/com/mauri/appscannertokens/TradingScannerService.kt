@@ -576,9 +576,6 @@ class TradingScannerService : Service() {
         "5m" -> Duration.ofMinutes(5)
         "15m" -> Duration.ofMinutes(15)
         "30m" -> Duration.ofMinutes(30)
-        "1h" -> Duration.ofHours(1)
-        "4h" -> Duration.ofHours(4)
-        "1d" -> Duration.ofDays(1)
-        else -> Duration.ofMinutes(3)
+             else -> Duration.ofMinutes(3)
     }
 }
