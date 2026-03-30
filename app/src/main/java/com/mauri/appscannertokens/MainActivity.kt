@@ -19,6 +19,8 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ExitToApp
+import androidx.compose.material.icons.filled.ExitToApp
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -33,6 +35,7 @@ import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import androidx.core.content.edit
 import java.util.Locale
+import kotlin.system.exitProcess
 
 class MainActivity : ComponentActivity() {
 
@@ -101,6 +104,14 @@ class MainActivity : ComponentActivity() {
                             detenerMotor()
                             Toast.makeText(this@MainActivity, "Radar Apagado 💤", Toast.LENGTH_SHORT).show()
                         }
+                    },
+                    onExitApp = {
+                        // APAGADO TOTAL DE LA APP
+                        detenerMotor()
+                        prefs.edit { putBoolean("recibir_alertas", false) }
+                        Toast.makeText(this@MainActivity, "Cerrando sistema por completo...", Toast.LENGTH_SHORT).show()
+                        finishAndRemoveTask() // Quita la app de "Recientes"
+                        exitProcess(0) // Aniquila el proceso en memoria RAM
                     }
                 )
             }
@@ -164,7 +175,8 @@ fun MainScreen(
     motorActivo: Boolean,
     saldoBilletera: Double,
     onConfigClick: () -> Unit,
-    onToggleMotor: (Boolean) -> Unit
+    onToggleMotor: (Boolean) -> Unit,
+    onExitApp: () -> Unit
 ) {
     var isDebugMode by remember { mutableStateOf(false) }
 
@@ -190,8 +202,16 @@ fun MainScreen(
                 )
             }
 
-            IconButton(onClick = onConfigClick, modifier = Modifier.align(Alignment.CenterEnd)) {
-                Icon(Icons.Default.Settings, "Config", tint = Color(0xFF8B949E))
+            // Íconos alineados a la derecha
+            Row(modifier = Modifier.align(Alignment.CenterEnd)) {
+                // NUEVO BOTÓN: Apagar App
+                IconButton(onClick = onExitApp) {
+                    Icon(Icons.AutoMirrored.Filled.ExitToApp, "Cerrar App", tint = Color(0xFFF85149))
+                }
+                // Botón: Configuración
+                IconButton(onClick = onConfigClick) {
+                    Icon(Icons.Default.Settings, "Config", tint = Color(0xFF8B949E))
+                }
             }
         }
 
