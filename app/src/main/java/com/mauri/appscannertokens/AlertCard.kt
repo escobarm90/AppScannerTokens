@@ -22,7 +22,7 @@ import java.util.*
 fun AlertCard(
     alerta: AlertData,
     config: UserConfig,
-    billetera: Double = 100.0, // Billetera de prueba
+    billetera: Double,
     onDismiss: () -> Unit
 ) {
     val context = LocalContext.current
@@ -43,9 +43,20 @@ fun AlertCard(
     val formatter = SimpleDateFormat("HH:mm:ss", Locale.getDefault())
     val horaStr = formatter.format(Date(alerta.timestamp))
 
-    val margenCalculado = billetera * (porcentajeUsado / 100)
+    // ========================================================
+    // MATEMÁTICA EXACTA DEL PNL Y TAMAÑO DE POSICIÓN
+    // ========================================================
+    val margenCalculado = if (billetera > 0) billetera * (porcentajeUsado / 100.0) else 0.0
     val nominalCalculado = margenCalculado * config.apalancamiento
-    val pnlCalculado = margenCalculado * 1.5
+
+    // Distancia en porcentaje desde la entrada hasta el Take Profit
+    val distanciaTpPct = if (alerta.precio > 0) Math.abs(alerta.tp - alerta.precio) / alerta.precio else 0.0
+
+    // Ganancia = Tamaño de posición * % de movimiento del precio
+    val pnlCalculado = nominalCalculado * distanciaTpPct
+
+    // ROE (Return on Equity) = Ganancia / Margen Invertido
+    val roeCalculado = distanciaTpPct * config.apalancamiento * 100.0
 
     Card(
         modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
@@ -54,7 +65,7 @@ fun AlertCard(
         border = androidx.compose.foundation.BorderStroke(1.dp, colorBorde)
     ) {
         Column(modifier = Modifier.padding(16.dp)) {
-            // HEADER
+            // --- HEADER ---
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                 Column {
                     Text("🪙 ${alerta.symbol}", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 20.sp)
@@ -67,14 +78,14 @@ fun AlertCard(
 
             Spacer(modifier = Modifier.height(12.dp))
 
-            // PRECIOS
+            // --- PRECIOS OBJETIVO ---
             DataRow("💵 ENTRADA", String.format(Locale.US, "%.6f", alerta.precio), colorCyan)
             DataRow("✅ TAKE PROFIT", String.format(Locale.US, "%.6f", alerta.tp), colorGreen)
             DataRow("❌ STOP LOSS", String.format(Locale.US, "%.6f", alerta.sl), colorRed)
 
             HorizontalDivider(modifier = Modifier.padding(vertical = 12.dp), color = colorBorde)
 
-            // CONTROLES
+            // --- CONTROLES DE EJECUCIÓN ---
             Text("⚡ EJECUTAR ORDEN RÁPIDA", color = colorCyan, fontSize = 12.sp, fontWeight = FontWeight.Bold)
             Spacer(modifier = Modifier.height(12.dp))
 
@@ -95,7 +106,7 @@ fun AlertCard(
                 colors = SliderDefaults.colors(thumbColor = if (isCruzado) colorCyan else colorYellow, activeTrackColor = if (isCruzado) colorCyan else colorYellow)
             )
 
-            // BOTONES
+            // --- BOTONES DE COMPRA/VENTA ---
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 val side = if (alerta.senal == "LONG") "BUY" else "SELL"
                 val cantidadMonedas = if (alerta.precio > 0) nominalCalculado / alerta.precio else 0.0
@@ -142,11 +153,33 @@ fun AlertCard(
                     Text(if (isEjecutando) "..." else "🚀 MARKET", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 12.sp)
                 }
             }
+
+            // BOTÓN DESCARTAR
+            Button(
+                onClick = onDismiss, modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = Color.Transparent), border = androidx.compose.foundation.BorderStroke(1.dp, colorBorde)
+            ) {
+                Text("❌ DESCARTAR SEÑAL", color = Color.LightGray)
+            }
+
+            HorizontalDivider(modifier = Modifier.padding(vertical = 12.dp), color = colorBorde)
+
+            // --- RESULTADOS ESTIMADOS (CON PNL REAL) ---
+            Text("🏦 RESULTADOS ESTIMADOS", color = colorYellow, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+            DataRow("Margen a Usar ($tipoMargen)", String.format(Locale.US, "$%.2f USDT", margenCalculado), Color.White)
+
+            // Fila de Ganancia + ROE %
+            Row(modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp), horizontalArrangement = Arrangement.SpaceBetween) {
+                Text("PNL Neto Est. (Si toca TP)", color = Color.Gray, fontSize = 14.sp)
+                Text(
+                    text = String.format(Locale.US, "$%.2f USDT (+%.2f%%)", pnlCalculado, roeCalculado),
+                    color = colorGreen, fontWeight = FontWeight.Bold, fontSize = 14.sp
+                )
+            }
         }
     }
 }
 
-// Función auxiliar para dibujar cada fila de texto
 @Composable
 fun DataRow(label: String, value: String, valueColor: Color) {
     Row(modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp), horizontalArrangement = Arrangement.SpaceBetween) {

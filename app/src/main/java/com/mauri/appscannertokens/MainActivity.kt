@@ -22,6 +22,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import com.google.gson.Gson
+import kotlinx.coroutines.launch
+import java.util.Locale
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -34,15 +36,10 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-// Función auxiliar para leer los parámetros guardados en el celular
 fun cargarConfiguracion(context: Context): UserConfig {
     val prefs = context.getSharedPreferences("AppScannerConfig", Context.MODE_PRIVATE)
     val jsonGuardado = prefs.getString("config_data", null)
-    return if (jsonGuardado != null) {
-        Gson().fromJson(jsonGuardado, UserConfig::class.java)
-    } else {
-        UserConfig()
-    }
+    return if (jsonGuardado != null) Gson().fromJson(jsonGuardado, UserConfig::class.java) else UserConfig()
 }
 
 @Composable
@@ -50,9 +47,11 @@ fun MonitorScreen(onOpenConfig: () -> Unit) {
     val alertas by AlertManager.alertas.collectAsState()
     val logsConsola by AlertManager.logs.collectAsState()
     val context = LocalContext.current
+    val coroutineScope = rememberCoroutineScope()
 
-    // Carga inicial de la configuración para la AlertCard
     var config by remember { mutableStateOf(cargarConfiguracion(context)) }
+    var saldoBilletera by remember { mutableStateOf(0.0) }
+    var isLoadingSaldo by remember { mutableStateOf(false) }
 
     val colorFondo = Color(0xFF0d1117)
     val colorCard = Color(0xFF161b22)
@@ -60,6 +59,20 @@ fun MonitorScreen(onOpenConfig: () -> Unit) {
 
     var isMotorRunning by remember { mutableStateOf(TradingScannerService.isRunning) }
     var isDebugEnabled by remember { mutableStateOf(TradingScannerService.isDebugMode) }
+
+    // Función para obtener el USDT de Binance
+    fun actualizarSaldo() {
+        if (config.apiKey.isNotEmpty() && config.apiSecret.isNotEmpty()) {
+            isLoadingSaldo = true
+            coroutineScope.launch {
+                saldoBilletera = BinanceApiManager.obtenerSaldoUSDT(config.apiKey, config.apiSecret)
+                isLoadingSaldo = false
+            }
+        }
+    }
+
+    // Se ejecuta apenas entras a la app
+    LaunchedEffect(Unit) { actualizarSaldo() }
 
     Column(modifier = Modifier.fillMaxSize().background(colorFondo).padding(16.dp)) {
 
@@ -74,6 +87,36 @@ fun MonitorScreen(onOpenConfig: () -> Unit) {
                 contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp)
             ) {
                 Text("⚙️ Parámetros", color = Color.White, fontWeight = FontWeight.SemiBold)
+            }
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        // --- SALDO DE BILLETERA REAL ---
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(containerColor = Color(0xFF1a2b22)),
+            border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF2ea043))
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(16.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column {
+                    Text("💰 SALDO DISPONIBLE (USDT)", color = Color.LightGray, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                    if (isLoadingSaldo) {
+                        Text("Consultando...", color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold)
+                    } else {
+                        Text(
+                            text = "$${String.format(Locale.US, "%.2f", saldoBilletera)}",
+                            color = Color(0xFF2ea043),
+                            fontSize = 28.sp,
+                            fontWeight = FontWeight.ExtraBold
+                        )
+                    }
+                }
+                IconButton(onClick = { actualizarSaldo() }) { Text("🔄", fontSize = 20.sp) }
             }
         }
 
@@ -114,15 +157,11 @@ fun MonitorScreen(onOpenConfig: () -> Unit) {
 
         Spacer(modifier = Modifier.height(16.dp))
 
-        // --- ZONA DIVIDIDA (ALERTAS Y TERMINAL) ---
+        // --- ZONA DE ALERTAS Y CONSOLA ---
         Column(modifier = Modifier.fillMaxSize()) {
-
-            // 1. ZONA DE ALERTAS
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                 Text("ÚLTIMAS OPORTUNIDADES", color = Color.Gray, fontSize = 12.sp, fontWeight = FontWeight.Bold)
-
-                // Botón práctico para recargar los parámetros sin cerrar la app
-                TextButton(onClick = { config = cargarConfiguracion(context) }) {
+                TextButton(onClick = { config = cargarConfiguracion(context); actualizarSaldo() }) {
                     Text("🔄 Refrescar Config", color = Color(0xFF58a6ff), fontSize = 10.sp)
                 }
             }
@@ -135,42 +174,24 @@ fun MonitorScreen(onOpenConfig: () -> Unit) {
                 } else {
                     LazyColumn(modifier = Modifier.fillMaxSize()) {
                         items(alertas) { alerta ->
-
-                            // AQUÍ PASAMOS LA CONFIGURACIÓN A LA TARJETA
-                            AlertCard(
-                                alerta = alerta,
-                                config = config,
-                                onDismiss = { AlertManager.removerAlerta(alerta) }
-                            )
-
+                            AlertCard(alerta = alerta, config = config, billetera = saldoBilletera, onDismiss = { AlertManager.removerAlerta(alerta) })
                         }
                     }
                 }
             }
 
-            // 2. ZONA DE CONSOLA CMD (Solo visible si Debug está encendido)
             if (isDebugEnabled) {
                 Spacer(modifier = Modifier.height(16.dp))
                 Text("TERMINAL EN VIVO", color = Color(0xFFe3b341), fontSize = 12.sp, fontWeight = FontWeight.Bold)
                 Spacer(modifier = Modifier.height(8.dp))
-
                 Card(
                     modifier = Modifier.weight(0.5f).fillMaxWidth(),
-                    colors = CardDefaults.cardColors(containerColor = Color.Black), // Fondo negro de consola
+                    colors = CardDefaults.cardColors(containerColor = Color.Black),
                     border = androidx.compose.foundation.BorderStroke(1.dp, colorBorde)
                 ) {
-                    LazyColumn(
-                        modifier = Modifier.fillMaxSize().padding(8.dp),
-                        reverseLayout = true // Efecto consola: lo nuevo empuja desde abajo
-                    ) {
+                    LazyColumn(modifier = Modifier.fillMaxSize().padding(8.dp), reverseLayout = true) {
                         items(logsConsola) { logMsg ->
-                            Text(
-                                text = logMsg,
-                                color = Color(0xFF00FF00), // Verde Terminal
-                                fontFamily = FontFamily.Monospace,
-                                fontSize = 10.sp,
-                                lineHeight = 14.sp
-                            )
+                            Text(text = logMsg, color = Color(0xFF00FF00), fontFamily = FontFamily.Monospace, fontSize = 10.sp, lineHeight = 14.sp)
                             Spacer(modifier = Modifier.height(8.dp))
                         }
                     }
