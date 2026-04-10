@@ -1,5 +1,6 @@
 package com.mauri.appscannertokens
 
+import kotlinx.coroutines.*
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
@@ -12,12 +13,6 @@ import android.util.Log
 import androidx.core.app.NotificationCompat
 import com.google.gson.Gson
 import com.google.gson.JsonParser
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.async
-import kotlinx.coroutines.awaitAll
-import kotlinx.coroutines.coroutineScope
-import kotlinx.coroutines.launch
 import okhttp3.*
 import org.ta4j.core.BaseBar
 import org.ta4j.core.BaseBarSeries
@@ -27,22 +22,16 @@ import org.ta4j.core.indicators.RSIIndicator
 import org.ta4j.core.indicators.adx.ADXIndicator
 import org.ta4j.core.indicators.helpers.ClosePriceIndicator
 import org.ta4j.core.indicators.ATRIndicator
-import org.ta4j.core.num.DecimalNum
+import org.ta4j.core.num.DecimalNum // IMPORTANTE: Aquí está el cambio vital
 import java.time.Duration
 import java.time.Instant
 import java.time.ZoneId
 import java.time.ZonedDateTime
 import java.util.Locale
-import java.util.concurrent.TimeUnit
 
 class TradingScannerService : Service() {
 
-    // Cliente HTTP con tiempos de espera ampliados (20s) para evitar cuelgues
-    private val client = OkHttpClient.Builder()
-        .connectTimeout(20, TimeUnit.SECONDS)
-        .readTimeout(20, TimeUnit.SECONDS)
-        .build()
-
+    private val client = OkHttpClient()
     private val gson = Gson()
     private lateinit var config: UserConfig
     private var webSocket: WebSocket? = null
@@ -69,7 +58,6 @@ class TradingScannerService : Service() {
             .build()
         startForeground(NOTIFICATION_ID, notification)
 
-        // Arrancamos el motor usando el hilo de fondo de Android (Corrutinas IO)
         CoroutineScope(Dispatchers.IO).launch {
             iniciarMotorEscaner()
         }
@@ -87,38 +75,33 @@ class TradingScannerService : Service() {
         }
     }
 
-    // Usamos suspend y coroutineScope para garantizar la descarga en paralelo real
     private suspend fun iniciarMotorEscaner() = coroutineScope {
         Log.d("Scanner", "Iniciando motor Multiusuario...")
 
         val topSymbols = obtenerTopPares()
         val duration = parseTimeframe(config.timeframe)
 
-        Log.d("Scanner", "Descargando historial para ${topSymbols.size} monedas usando Corrutinas en paralelo...")
+        Log.d("Scanner", "Descargando historial para ${topSymbols.size} monedas usando Corrutinas...")
 
-        // Descarga multihilo: Lanzamos las 50 peticiones a la vez
         val descargas = topSymbols.map { symbol ->
             async(Dispatchers.IO) {
                 val series = BaseBarSeriesBuilder().withName(symbol).build()
                 series.maximumBarCount = 300
                 descargarHistorial(symbol, config.timeframe, series, duration)
 
-                // Evitamos choques de memoria al escribir en el mapa
                 synchronized(marketData) {
                     marketData[symbol] = series
                 }
             }
         }
 
-        // Esperamos a que terminen las 50 descargas antes de avanzar
         descargas.awaitAll()
 
-        Log.d("Scanner", "¡Historial descargado con éxito! Conectando a WebSockets de Binance...")
+        Log.d("Scanner", "¡Historial descargado con éxito! Iniciando WebSockets...")
         conectarWebSocket(topSymbols, duration)
     }
 
     private fun obtenerTopPares(): List<String> {
-        Log.d("Scanner", "Conectando a Binance para obtener TOP pares...")
         val request = Request.Builder().url("https://fapi.binance.com/fapi/v1/ticker/24hr").build()
         return try {
             client.newCall(request).execute().use { response ->
@@ -141,25 +124,22 @@ class TradingScannerService : Service() {
         val request = Request.Builder().url(url).build()
         try {
             client.newCall(request).execute().use { response ->
-                if (!response.isSuccessful) {
-                    Log.e("Scanner", "Error HTTP ${response.code} para $symbol")
-                    return
-                }
                 val body = response.body?.string() ?: return
                 val klines = JsonParser.parseString(body).asJsonArray
                 for (k in klines) {
                     val kline = k.asJsonArray
                     val endTime = ZonedDateTime.ofInstant(Instant.ofEpochMilli(kline.get(6).asLong), ZoneId.of("UTC"))
 
+                    // IMPORTANTE: Cambio a DecimalNum para asegurar compatibilidad con TA4J
                     val bar = BaseBar(
                         duration,
                         endTime,
-                        DecimalNum.valueOf(kline.get(1).asDouble),
-                        DecimalNum.valueOf(kline.get(2).asDouble),
-                        DecimalNum.valueOf(kline.get(3).asDouble),
-                        DecimalNum.valueOf(kline.get(4).asDouble),
-                        DecimalNum.valueOf(kline.get(5).asDouble),
-                        DecimalNum.valueOf(0.0)
+                        DecimalNum.valueOf(kline.get(1).asString),
+                        DecimalNum.valueOf(kline.get(2).asString),
+                        DecimalNum.valueOf(kline.get(3).asString),
+                        DecimalNum.valueOf(kline.get(4).asString),
+                        DecimalNum.valueOf(kline.get(5).asString),
+                        DecimalNum.valueOf("0.0")
                     )
                     series.addBar(bar)
                 }
@@ -214,15 +194,16 @@ class TradingScannerService : Service() {
         val series = marketData[symbol] ?: return
         val endZoned = ZonedDateTime.ofInstant(Instant.ofEpochMilli(closeTime), ZoneId.of("UTC"))
 
+        // IMPORTANTE: Cambio a DecimalNum para asegurar compatibilidad con TA4J
         val bar = BaseBar(
             duration,
             endZoned,
-            DecimalNum.valueOf(open),
-            DecimalNum.valueOf(high),
-            DecimalNum.valueOf(low),
-            DecimalNum.valueOf(close),
-            DecimalNum.valueOf(volume),
-            DecimalNum.valueOf(0.0)
+            DecimalNum.valueOf(open.toString()),
+            DecimalNum.valueOf(high.toString()),
+            DecimalNum.valueOf(low.toString()),
+            DecimalNum.valueOf(close.toString()),
+            DecimalNum.valueOf(volume.toString()),
+            DecimalNum.valueOf("0.0")
         )
 
         try {
