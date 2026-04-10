@@ -2,580 +2,308 @@ package com.mauri.appscannertokens
 
 import android.app.NotificationChannel
 import android.app.NotificationManager
+import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
-import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
-import android.os.VibrationEffect
-import android.os.Vibrator
+import android.util.Log
 import androidx.core.app.NotificationCompat
+import com.google.gson.Gson
 import com.google.gson.JsonObject
 import com.google.gson.JsonParser
-import okhttp3.OkHttpClient
-import okhttp3.Request
-import okhttp3.WebSocket
-import okhttp3.WebSocketListener
-import org.ta4j.core.BarSeries
+import okhttp3.*
+import org.ta4j.core.BaseBar
+import org.ta4j.core.BaseBarSeries
 import org.ta4j.core.BaseBarSeriesBuilder
-import org.ta4j.core.indicators.ATRIndicator
+import org.ta4j.core.indicators.EMAIndicator
 import org.ta4j.core.indicators.RSIIndicator
-import org.ta4j.core.indicators.averages.EMAIndicator
-import org.ta4j.core.indicators.averages.SMAIndicator
-import org.ta4j.core.indicators.bollinger.BollingerBandsLowerIndicator
-import org.ta4j.core.indicators.bollinger.BollingerBandsMiddleIndicator
-import org.ta4j.core.indicators.bollinger.BollingerBandsUpperIndicator
+import org.ta4j.core.indicators.adx.ADXIndicator
 import org.ta4j.core.indicators.helpers.ClosePriceIndicator
-import org.ta4j.core.indicators.helpers.VolumeIndicator
-import org.ta4j.core.indicators.statistics.StandardDeviationIndicator
+import org.ta4j.core.indicators.ATRIndicator
 import org.ta4j.core.num.DoubleNum
-import java.nio.charset.StandardCharsets
-import java.text.SimpleDateFormat
 import java.time.Duration
 import java.time.Instant
-import java.util.Date
+import java.time.ZoneId
+import java.time.ZonedDateTime
 import java.util.Locale
-import java.util.concurrent.ConcurrentHashMap
-import javax.crypto.Mac
-import javax.crypto.spec.SecretKeySpec
-import kotlin.math.abs
-
-data class OrderFlowData(
-    val spread: Double,
-    val bidQty: Double,
-    val askQty: Double,
-    val pctCompras: Double
-)
 
 class TradingScannerService : Service() {
 
-    companion object {
-        private const val CHANNEL_ID = "ScannerServiceChannel"
-        private const val TOP_VOLATILES = 50
-        private const val VOLUMEN_MIN_24H = 15000000.0
-        private const val SPREAD_MAXIMO = 0.15
-        private const val VOL_RATIO_MINIMO = 1.0
-    }
-
-    private val prefs by lazy { getSharedPreferences(PrefKeys.PREFS_NAME, Context.MODE_PRIVATE) }
-    private var isScanning = false
     private val client = OkHttpClient()
+    private val gson = Gson()
+    private lateinit var config: UserConfig
     private var webSocket: WebSocket? = null
-    private val mercado: MutableMap<String, BarSeries> = ConcurrentHashMap()
-    private val ultimaAlertaPorToken = ConcurrentHashMap<String, Long>()
 
-    private var ultimoSaldoCache: Double = 0.0
-    private var ultimaVezSaldoActualizado: Long = 0L
+    private val marketData = mutableMapOf<String, BaseBarSeries>()
+
+    companion object {
+        const val CHANNEL_ID = "TradingScannerChannel"
+        const val NOTIFICATION_ID = 1
+    }
 
     override fun onCreate() {
         super.onCreate()
-        try {
-            crearCanalNotificacion()
-        } catch (e: Exception) {
-            enviarDebug("⚠️ Error al crear canal: ${e.message}")
-        }
+        crearCanalNotificacion()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        try {
-            val notification = NotificationCompat.Builder(this, CHANNEL_ID)
-                .setContentTitle("Motor Scanner Activo")
-                .setContentText("Analizando Microestructura de Mercado...")
-                .setSmallIcon(R.mipmap.ic_launcher)
-                .build()
+        config = cargarConfiguracion()
 
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-                startForeground(1, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
-            } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                startForeground(1, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
-            } else {
-                startForeground(1, notification)
-            }
+        val notification = NotificationCompat.Builder(this, CHANNEL_ID)
+            .setContentTitle("Escáner Activo")
+            .setContentText("Buscando oportunidades en Binance (${config.timeframe})")
+            .setSmallIcon(android.R.drawable.ic_dialog_info)
+            .build()
+        startForeground(NOTIFICATION_ID, notification)
 
-            if (!isScanning) {
-                iniciarMotorBinance()
-                isScanning = true
-            }
-        } catch (e: Exception) {
-            enviarDebug("🚨 CRASH PREVENIDO en onStartCommand: ${e.message}")
-        }
+        Thread {
+            iniciarMotorEscaner()
+        }.start()
+
         return START_STICKY
     }
 
-    private fun iniciarMotorBinance() {
-        val tframe = prefs.getString(PrefKeys.TIMEFRAME, "3m") ?: "3m"
-        val duracion = cuandoTimeframeADuration(tframe)
+    private fun cargarConfiguracion(): UserConfig {
+        val prefs = getSharedPreferences("AppScannerConfig", Context.MODE_PRIVATE)
+        val jsonGuardado = prefs.getString("config_data", null)
+        return if (jsonGuardado != null) {
+            gson.fromJson(jsonGuardado, UserConfig::class.java)
+        } else {
+            UserConfig()
+        }
+    }
 
-        Thread {
-            try {
-                enviarDebug("🚀 Iniciando Motor (Temporalidad: $tframe)...")
-                val topPares = obtenerTopPares()
-                enviarDebug("✅ Top ${topPares.size} pares filtrados. Descargando historial...")
+    private fun iniciarMotorEscaner() {
+        Log.d("Scanner", "Iniciando motor Multiusuario...")
 
-                for (symbol in topPares) {
-                    descargarVelas(symbol, tframe, duracion)
-                    Thread.sleep(50)
-                }
+        val topSymbols = obtenerTopPares()
+        val duration = parseTimeframe(config.timeframe)
 
-                enviarDebug("✅ Historial descargado. Conectando WebSockets en vivo...")
-                iniciarWebsocketMultiplex(topPares, tframe, duracion)
+        topSymbols.forEach { symbol ->
+            val series = BaseBarSeriesBuilder().withName(symbol).build()
+            series.maximumBarCount = 300
+            descargarHistorial(symbol, config.timeframe, series, duration)
+            marketData[symbol] = series
+        }
 
-            } catch (e: Exception) {
-                enviarDebug("❌ Error fatal en Motor: ${e.message}")
-            }
-        }.start()
+        conectarWebSocket(topSymbols, duration)
     }
 
     private fun obtenerTopPares(): List<String> {
-        val validTickers = mutableListOf<JsonObject>()
         val request = Request.Builder().url("https://fapi.binance.com/fapi/v1/ticker/24hr").build()
-
         return try {
             client.newCall(request).execute().use { response ->
-                val json = response.body?.string() ?: return emptyList()
-                val tickers = JsonParser.parseString(json).asJsonArray
-
-                for (elem in tickers) {
-                    val t = elem.asJsonObject
-                    val symbol = t.get("symbol").asString
-                    val volume = t.get("quoteVolume").asDouble
-
-                    if (symbol.endsWith("USDT") &&
-                        !symbol.contains("BTCUSDT") &&
-                        !symbol.contains("ETHUSDT") &&
-                        !symbol.contains("USDCUSDT") &&
-                        !symbol.contains("FDUSDUSDT") &&
-                        volume > VOLUMEN_MIN_24H) {
-                        validTickers.add(t)
-                    }
-                }
-
-                validTickers.sortByDescending { abs(it.get("priceChangePercent").asDouble) }
-                validTickers.take(TOP_VOLATILES).map { it.get("symbol").asString }
+                val body = response.body?.string() ?: return emptyList()
+                val tickers = JsonParser.parseString(body).asJsonArray
+                tickers.map { it.asJsonObject }
+                    .filter { it.get("symbol").asString.endsWith("USDT") }
+                    .sortedByDescending { it.get("quoteVolume").asDouble }
+                    .take(50)
+                    .map { it.get("symbol").asString }
             }
         } catch (e: Exception) {
-            enviarDebug("⚠️ Error al obtener tickers: ${e.message}")
-            emptyList()
+            Log.e("Scanner", "Error obteniendo top pares: ${e.message}")
+            listOf("BTCUSDT", "ETHUSDT", "SOLUSDT")
         }
     }
 
-    private fun descargarVelas(symbol: String, timeframe: String, duracion: Duration) {
+    private fun descargarHistorial(symbol: String, timeframe: String, series: BaseBarSeries, duration: Duration) {
         val url = "https://fapi.binance.com/fapi/v1/klines?symbol=$symbol&interval=$timeframe&limit=250"
         val request = Request.Builder().url(url).build()
-
         try {
             client.newCall(request).execute().use { response ->
-                val json = response.body?.string() ?: return
-                val klines = JsonParser.parseString(json).asJsonArray
-                val velas = mutableListOf<org.ta4j.core.Bar>()
-
-                for (elem in klines) {
-                    val k = elem.asJsonArray
-                    val closeTime = k.get(6).asLong
-                    val open = k.get(1).asDouble
-                    val high = k.get(2).asDouble
-                    val low = k.get(3).asDouble
-                    val close = k.get(4).asDouble
-                    val vol = k.get(5).asDouble
-
-                    val endTime = Instant.ofEpochMilli(closeTime)
-                    val beginTime = endTime.minus(duracion)
-
-                    velas.add(
-                        org.ta4j.core.BaseBar(
-                            duracion, beginTime, endTime,
-                            DoubleNum.valueOf(open), DoubleNum.valueOf(high), DoubleNum.valueOf(low),
-                            DoubleNum.valueOf(close), DoubleNum.valueOf(vol), DoubleNum.valueOf(0.0), 0L
-                        )
+                val body = response.body?.string() ?: return
+                val klines = JsonParser.parseString(body).asJsonArray
+                for (k in klines) {
+                    val kline = k.asJsonArray
+                    val endTime = Instant.ofEpochMilli(kline.get(6).asLong)
+                    val bar = BaseBar(
+                        duration,
+                        endTime.minus(duration),
+                        endTime,
+                        DoubleNum.valueOf(kline.get(1).asDouble),
+                        DoubleNum.valueOf(kline.get(2).asDouble),
+                        DoubleNum.valueOf(kline.get(3).asDouble),
+                        DoubleNum.valueOf(kline.get(4).asDouble),
+                        DoubleNum.valueOf(kline.get(5).asDouble),
+                        DoubleNum.valueOf(0.0), // amount
+                        0L // trades
                     )
+                    series.addBar(bar)
                 }
-
-                val serie = BaseBarSeriesBuilder()
-                    .withName(symbol)
-                    .withMaxBarCount(250)
-                    .withBars(velas)
-                    .build()
-                mercado[symbol] = serie
             }
         } catch (e: Exception) {
-            enviarDebug("⚠️ Error al descargar $symbol: ${e.message}")
+            Log.e("Scanner", "Error descargando historial para $symbol: ${e.message}")
         }
     }
 
-    private fun iniciarWebsocketMultiplex(pares: List<String>, timeframe: String, duracion: Duration) {
-        val streams = pares.joinToString("/") { "${it.lowercase()}@kline_$timeframe" }
-        val wssUrl = "wss://fstream.binance.com/stream?streams=$streams"
-        val request = Request.Builder().url(wssUrl).build()
+    private fun conectarWebSocket(symbols: List<String>, duration: Duration) {
+        val timeframe = config.timeframe
+        val streams = symbols.joinToString("/") { "${it.lowercase()}@kline_$timeframe" }
+        val wsUrl = "wss://fstream.binance.com/stream?streams=$streams"
 
+        val request = Request.Builder().url(wsUrl).build()
         webSocket = client.newWebSocket(request, object : WebSocketListener() {
             override fun onMessage(webSocket: WebSocket, text: String) {
                 try {
                     val json = JsonParser.parseString(text).asJsonObject
                     if (!json.has("data")) return
-
                     val data = json.getAsJsonObject("data")
-                    val symbol = data.get("s").asString
                     val kline = data.getAsJsonObject("k")
-
-                    if (kline.get("i").asString != timeframe) return
-                    if (!mercado.containsKey(symbol)) return
-
+                    
+                    val symbol = data.get("s").asString
+                    val isKLineClosed = kline.get("x").asBoolean
+                    val closePrice = kline.get("c").asDouble
+                    val openPrice = kline.get("o").asDouble
+                    val highPrice = kline.get("h").asDouble
+                    val lowPrice = kline.get("l").asDouble
+                    val volume = kline.get("v").asDouble
                     val closeTime = kline.get("T").asLong
-                    val open = kline.get("o").asDouble
-                    val high = kline.get("h").asDouble
-                    val low = kline.get("l").asDouble
-                    val close = kline.get("c").asDouble
-                    val vol = kline.get("v").asDouble
 
-                    val endTime = Instant.ofEpochMilli(closeTime)
-                    val beginTime = endTime.minus(duracion)
-                    val serie = mercado[symbol] ?: return
-
-                    val vela = org.ta4j.core.BaseBar(
-                        duracion, beginTime, endTime,
-                        DoubleNum.valueOf(open), DoubleNum.valueOf(high), DoubleNum.valueOf(low),
-                        DoubleNum.valueOf(close), DoubleNum.valueOf(vol), DoubleNum.valueOf(0.0), 0L
-                    )
-
-                    if (serie.barCount > 0 && serie.lastBar.endTime == endTime) {
-                        serie.addBar(vela, true)
-                    } else {
-                        serie.addBar(vela, false)
-                    }
-
-                    analizarOportunidad(symbol, serie)
+                    actualizarVela(symbol, openPrice, highPrice, lowPrice, closePrice, volume, closeTime, isKLineClosed, duration)
                 } catch (e: Exception) {
-                    enviarDebug("⚠️ Error procesando WS: ${e.message}")
+                    Log.e("Scanner", "Error parseando WS: ${e.message}")
                 }
             }
 
-            override fun onFailure(webSocket: WebSocket, t: Throwable, response: okhttp3.Response?) {
-                enviarDebug("⚠️ WebSocket falló: ${t.message}. Reintentando en 10s...")
+            override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+                Log.e("Scanner", "Error WebSocket: ${t.message}. Reiniciando en 10s...")
                 Thread.sleep(10000)
-                if (isScanning) iniciarMotorBinance()
+                conectarWebSocket(symbols, duration)
             }
         })
     }
 
-    private fun calcularOrderFlow(symbol: String): OrderFlowData? {
+    private fun actualizarVela(
+        symbol: String, open: Double, high: Double, low: Double, close: Double, 
+        volume: Double, closeTime: Long, isClosed: Boolean, duration: Duration
+    ) {
+        val series = marketData[symbol] ?: return
+        val endInstant = Instant.ofEpochMilli(closeTime)
+
+        val bar = BaseBar(
+            duration,
+            endInstant.minus(duration),
+            endInstant,
+            DoubleNum.valueOf(open),
+            DoubleNum.valueOf(high),
+            DoubleNum.valueOf(low),
+            DoubleNum.valueOf(close),
+            DoubleNum.valueOf(volume),
+            DoubleNum.valueOf(0.0), // amount
+            0L // trades
+        )
+
         try {
-            val reqOb = Request.Builder().url("https://fapi.binance.com/fapi/v1/depth?symbol=$symbol&limit=5").build()
-            val resOb = client.newCall(reqOb).execute()
-            if (!resOb.isSuccessful) return null
-            val jsonOb = JsonParser.parseString(resOb.body?.string()).asJsonObject
-
-            val bids = jsonOb.getAsJsonArray("bids")
-            val asks = jsonOb.getAsJsonArray("asks")
-
-            var bidQty = 0.0
-            for (i in 0 until bids.size()) bidQty += bids.get(i).asJsonArray.get(1).asDouble
-
-            var askQty = 0.0
-            for (i in 0 until asks.size()) askQty += asks.get(i).asJsonArray.get(1).asDouble
-
-            val bestBid = bids.get(0).asJsonArray.get(0).asDouble
-            val bestAsk = asks.get(0).asJsonArray.get(0).asDouble
-            val spread = if (bestBid > 0) ((bestAsk - bestBid) / bestBid) * 100 else 99.0
-
-            val reqTrades = Request.Builder().url("https://fapi.binance.com/fapi/v1/trades?symbol=$symbol&limit=20").build()
-            val resTrades = client.newCall(reqTrades).execute()
-            if (!resTrades.isSuccessful) return null
-            val jsonTrades = JsonParser.parseString(resTrades.body?.string()).asJsonArray
-
-            var volCompras = 0.0
-            var volTotal = 0.0
-            for (i in 0 until jsonTrades.size()) {
-                val trade = jsonTrades.get(i).asJsonObject
-                val qty = trade.get("qty").asDouble
-                val isBuyerMaker = trade.get("isBuyerMaker").asBoolean
-                volTotal += qty
-                if (!isBuyerMaker) volCompras += qty
+            if (series.barCount > 0 && series.lastBar.endTime.toInstant() == endInstant) {
+                series.addBar(bar, true) // Reemplazar última si es el mismo tiempo
+            } else if (isClosed) {
+                series.addBar(bar)
+                evaluateStrategy(symbol, series)
             }
-            val pctCompras = if (volTotal > 0) (volCompras / volTotal) * 100 else 50.0
-
-            return OrderFlowData(spread, bidQty, askQty, pctCompras)
         } catch (e: Exception) {
-            return null
+            Log.e("Scanner", "Error actualizando serie $symbol: ${e.message}")
         }
     }
 
-    private fun obtenerSaldoBilleteraUSDT(): Double {
-        val saldoManual = prefs.getFloat(PrefKeys.BILLETERA_MANUAL, 20.0f).toDouble()
-        val apiKey = prefs.getString(PrefKeys.API_KEY, "") ?: ""
-        val secretKey = prefs.getString(PrefKeys.SECRET_KEY, "") ?: ""
-
-        if (apiKey.isEmpty() || secretKey.isEmpty()) {
-            enviarSaldoAMainActivity(saldoManual)
-            return saldoManual
-        }
-
-        val tiempoActual = System.currentTimeMillis()
-        if (tiempoActual - ultimaVezSaldoActualizado < 30_000L && ultimoSaldoCache > 0.0) {
-            return ultimoSaldoCache
-        }
-
-        return try {
-            val queryString = "timestamp=$tiempoActual"
-            val sha256HMAC = Mac.getInstance("HmacSHA256")
-            val secretKeySpec = SecretKeySpec(secretKey.trim().toByteArray(StandardCharsets.UTF_8), "HmacSHA256")
-            sha256HMAC.init(secretKeySpec)
-            val hash = sha256HMAC.doFinal(queryString.toByteArray(StandardCharsets.UTF_8))
-            val signature = hash.joinToString("") { "%02x".format(it) }
-
-            val url = "https://fapi.binance.com/fapi/v2/balance?$queryString&signature=$signature"
-            val request = Request.Builder().url(url).addHeader("X-MBX-APIKEY", apiKey.trim()).build()
-
-            client.newCall(request).execute().use { response ->
-                if (response.isSuccessful && response.body != null) {
-                    val balances = JsonParser.parseString(response.body!!.string()).asJsonArray
-                    for (b in balances) {
-                        val balance = b.asJsonObject
-                        if (balance.get("asset").asString == "USDT") {
-                            val saldoReal = balance.get("balance").asDouble
-                            ultimoSaldoCache = saldoReal
-                            ultimaVezSaldoActualizado = tiempoActual
-                            enviarSaldoAMainActivity(saldoReal)
-                            return saldoReal
-                        }
-                    }
-                }
-            }
-            enviarSaldoAMainActivity(saldoManual)
-            saldoManual
-        } catch (e: Exception) {
-            enviarSaldoAMainActivity(saldoManual)
-            saldoManual
-        }
-    }
-
-    private fun enviarSaldoAMainActivity(saldo: Double) {
-        val intent = Intent("NUEVO_SALDO")
-        intent.setPackage(packageName)
-        intent.putExtra("saldo", saldo)
-        sendBroadcast(intent)
-    }
-
-    private fun analizarOportunidad(symbol: String, series: BarSeries) {
-        if (series.barCount < 50) return
-
-        val ultima = series.endIndex
-        val previa = ultima - 1
-
-        val closePrice = ClosePriceIndicator(series)
-        val rsi = RSIIndicator(closePrice, 14)
-        val ema7 = EMAIndicator(closePrice, 7)
-        val ema200 = EMAIndicator(closePrice, 200)
+    private fun evaluateStrategy(symbol: String, series: BaseBarSeries) {
+        if (series.barCount < 200) return
+        
+        val closePriceInd = ClosePriceIndicator(series)
+        val rsi = RSIIndicator(closePriceInd, 14)
+        val ema7 = EMAIndicator(closePriceInd, 7)
+        val ema200 = EMAIndicator(closePriceInd, 200)
+        val adx = ADXIndicator(series, 14)
         val atr = ATRIndicator(series, 14)
 
-        val volumenInd = VolumeIndicator(series)
-        val volSma = SMAIndicator(volumenInd, 20)
+        val lastIdx = series.endIndex
+        val prevIdx = lastIdx - 1
 
-        val sma20 = SMAIndicator(closePrice, 20)
-        val sd20 = StandardDeviationIndicator(closePrice, 20)
-        val bbMiddle = BollingerBandsMiddleIndicator(sma20)
+        val closeActual = closePriceInd.getValue(lastIdx).doubleValue()
+        val closePrevio = closePriceInd.getValue(prevIdx).doubleValue()
+        val ema7Actual = ema7.getValue(lastIdx).doubleValue()
+        val ema7Previo = ema7.getValue(prevIdx).doubleValue()
+        val ema200Actual = ema200.getValue(lastIdx).doubleValue()
+        val rsiActual = rsi.getValue(lastIdx).doubleValue()
+        val adxActual = adx.getValue(lastIdx).doubleValue()
+        val atrActual = atr.getValue(lastIdx).doubleValue()
 
-        val bbUpper = BollingerBandsUpperIndicator(bbMiddle, sd20, DoubleNum.valueOf(2.0))
-        val bbLower = BollingerBandsLowerIndicator(bbMiddle, sd20, DoubleNum.valueOf(2.0))
+        val atrPct = (atrActual / closeActual) * 100
+        if (atrPct < config.minVolatilidadPct) return
 
-        val precioActual = closePrice.getValue(ultima).doubleValue()
-        val precioApertura = series.getBar(ultima).openPrice.doubleValue()
-        val precioMinimo = series.getBar(ultima).lowPrice.doubleValue()
-        val precioMaximo = series.getBar(ultima).highPrice.doubleValue()
-        val volumenActual = volumenInd.getValue(ultima).doubleValue()
-        val volPromedio = volSma.getValue(ultima).doubleValue()
+        val tendenciaAlcista = closeActual > ema200Actual
+        val tendenciaBajista = closeActual < ema200Actual
+        val gatilloLong = (closePrevio <= ema7Previo) && (closeActual > ema7Actual)
+        val gatilloShort = (closePrevio >= ema7Previo) && (closeActual < ema7Actual)
 
-        val valorEma7 = ema7.getValue(ultima).doubleValue()
-        val ema7Previa = ema7.getValue(previa).doubleValue()
-        val valorBbLower = bbLower.getValue(ultima).doubleValue()
-        val valorBbUpper = bbUpper.getValue(ultima).doubleValue()
-        val valorEma200 = ema200.getValue(ultima).doubleValue()
-        val valorAtr = atr.getValue(ultima).doubleValue()
-
-        val atrP = if (precioActual > 0) (valorAtr / precioActual) * 100 else 0.0
-        val volRatio = if (volPromedio > 0) volumenActual / volPromedio else 0.0
-
-        val cierrePrevio = closePrice.getValue(previa).doubleValue()
-        val minPrevio = series.getBar(previa).lowPrice.doubleValue()
-        val maxPrevio = series.getBar(previa).highPrice.doubleValue()
-        val bbLowerPrevio = bbLower.getValue(previa).doubleValue()
-        val bbUpperPrevio = bbUpper.getValue(previa).doubleValue()
-
-        val velaVerde = precioActual > precioApertura
-        val velaRoja = precioActual < precioApertura
-
-        val toqueBbInf = (minPrevio <= bbLowerPrevio) || (precioMinimo <= valorBbLower)
-        val recuperaEma7 = (cierrePrevio < ema7Previa) && (precioActual > valorEma7)
-
-        val toqueBbSup = (maxPrevio >= bbUpperPrevio) || (precioMaximo >= valorBbUpper)
-        val pierdeEma7 = (cierrePrevio > ema7Previa) && (precioActual < valorEma7)
-
-        var senalTecnica = "NEUTRAL"
-        if (toqueBbInf && recuperaEma7 && velaVerde) senalTecnica = "LONG"
-        else if (toqueBbSup && pierdeEma7 && velaRoja) senalTecnica = "SHORT"
-
-        val billeteraReal = obtenerSaldoBilleteraUSDT()
-        val P = prefs.getFloat(PrefKeys.TAMANO_POS_PCT, 10.0f) / 100.0
-        val L = prefs.getFloat(PrefKeys.APALANCAMIENTO, 20.0f).toDouble()
-        val R = prefs.getFloat(PrefKeys.PERDIDA_MAX_PCT, 2.0f) / 100.0
-        val roiMinimo = prefs.getFloat(PrefKeys.ROI_MINIMO, 5.0f).toDouble()
-        val tipoMargen = prefs.getString(PrefKeys.TIPO_MARGEN, "ISOLATED") ?: "ISOLATED"
-        val RR = 2.0
-
-        val margenPorOperacion = billeteraReal * P
-        val atrMinimoRequerido = (roiMinimo + (L * 0.1)) / (L * 2.0)
-
-        var razonRechazo = ""
-        var infoOrderFlow = "No evaluado (Sin señal)"
-        var printMuro = "Muro Orderbook:  No evaluado (Sin señal)"
-        var printFlujo = "Flujo Trades:    No evaluado (Sin señal)"
-
-        if (senalTecnica != "NEUTRAL") {
-            val tiempoActual = System.currentTimeMillis()
-            val tiempoUltima = ultimaAlertaPorToken[symbol] ?: 0L
-
-            if ((tiempoActual - tiempoUltima) < 60_000L) {
-                razonRechazo = "RECHAZADO - EN COOLDOWN (1 MIN)"
-            } else if (volRatio <= VOL_RATIO_MINIMO) {
-                razonRechazo = String.format(Locale.US, "RECHAZADO - VOL RATIO %.2fx <= %.2fx", volRatio, VOL_RATIO_MINIMO)
-            } else if (atrP < atrMinimoRequerido) {
-                razonRechazo = String.format(Locale.US, "RECHAZADO - MERCADO PLANO (ATR: %.2f%% < Req: %.2f%%)", atrP, atrMinimoRequerido)
-            } else {
-                val orderFlow = calcularOrderFlow(symbol)
-
-                if (orderFlow == null) {
-                    razonRechazo = "RECHAZADO - ERROR API BINANCE"
-                } else {
-                    printMuro = String.format(Locale.US, "Muro Orderbook:  Bid %.1f / Ask %.1f", orderFlow.bidQty, orderFlow.askQty)
-                    printFlujo = String.format(Locale.US, "Flujo Trades:    %.2f%% Fuerza Compradora", orderFlow.pctCompras)
-                    infoOrderFlow = String.format(Locale.US, "Bid: %.1f / Ask: %.1f | Fuerza: %.1f%%", orderFlow.bidQty, orderFlow.askQty, orderFlow.pctCompras)
-
-                    if (orderFlow.spread > SPREAD_MAXIMO) {
-                        razonRechazo = String.format(Locale.US, "RECHAZADO - SPREAD %.3f%% > %.2f%%", orderFlow.spread, SPREAD_MAXIMO)
-                    } else if (senalTecnica == "LONG" && orderFlow.pctCompras < 45.0) {
-                        razonRechazo = "RECHAZADO LONG - FALTA FUERZA DE DIRECCIÓN"
-                    } else if (senalTecnica == "SHORT" && orderFlow.pctCompras > 55.0) {
-                        razonRechazo = "RECHAZADO SHORT - FALTA FUERZA DE DIRECCIÓN"
-                    } else {
-                        razonRechazo = "¡REVERSIÓN $senalTecnica CONFIRMADA! ENVIANDO A ALERTAS..."
-                        ultimaAlertaPorToken[symbol] = tiempoActual
-                        val horaExacta = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date(tiempoActual))
-
-                        val PE = precioActual
-                        val sl: Double
-                        val tp: Double
-
-                        if (senalTecnica == "LONG") {
-                            sl = PE * (1.0 - (R / (P * L)))
-                            tp = PE + (PE - sl) * RR
-                        } else {
-                            sl = PE * (1.0 + (R / (P * L)))
-                            tp = PE - (sl - PE) * RR
-                        }
-
-                        val distTp = abs(tp - PE)
-                        val tamanoPosicionReal = margenPorOperacion * L
-                        val cantidadTokens = tamanoPosicionReal / PE
-
-                        val gananciaBrutaUSDT = cantidadTokens * distTp
-                        val feeEntrada = tamanoPosicionReal * 0.0005
-                        val feeSalida = (cantidadTokens * tp) * 0.0005
-                        val pnlNeto = gananciaBrutaUSDT - (feeEntrada + feeSalida)
-                        val roi = if (margenPorOperacion > 0) (pnlNeto / margenPorOperacion) * 100 else 0.0
-
-                        // AQUÍ PREPARAMOS LOS TEXTOS PARA MANDAR A LA TARJETA
-                        val strMargen = String.format(Locale.US, "%.2f", margenPorOperacion)
-                        val strApalancamiento = "${L.toInt()}x ($tipoMargen)"
-                        val strPe = String.format(Locale.US, "%.6f", PE)
-                        val strTp = String.format(Locale.US, "%.6f", tp)
-                        val strSl = String.format(Locale.US, "%.6f", sl)
-                        val strPnl = String.format(Locale.US, "%.2f", pnlNeto)
-                        val strRoi = String.format(Locale.US, "%.2f", roi)
-
-                        // AQUÍ LOS ENVIAMOS (Asegúrate de tener este bloque exacto)
-                        val intent = Intent("NUEVA_ALERTA")
-                        intent.setPackage(packageName)
-                        intent.putExtra("token", symbol)
-                        intent.putExtra("senal", senalTecnica)
-                        intent.putExtra("hora", horaExacta)
-                        intent.putExtra("precio", strPe)
-                        intent.putExtra("margen", strMargen)
-                        intent.putExtra("apalancamiento", strApalancamiento)
-                        intent.putExtra("tp", strTp)
-                        intent.putExtra("sl", strSl)
-                        intent.putExtra("pnl_neto", strPnl)
-                        intent.putExtra("roi", strRoi)
-                        sendBroadcast(intent)
-
-                        hacerVibrar(senalTecnica)
-                    }
-                }
-            }
+        var senal = "NEUTRAL"
+        if (tendenciaAlcista && gatilloLong && adxActual >= 18.0 && rsiActual < 65.0) {
+            senal = "LONG"
+        } else if (tendenciaBajista && gatilloShort && adxActual >= 18.0 && rsiActual > 35.0) {
+            senal = "SHORT"
         }
 
-        val debugMsj = """
-            
-            --- ANALIZANDO: $symbol ---
-            Precio Actual:   ${String.format(Locale.US, "%.6f", precioActual)}
-            RSI (14):        ${String.format(Locale.US, "%.2f", rsi.getValue(ultima).doubleValue())}
-            EMA 7:           ${String.format(Locale.US, "%.6f", valorEma7)}
-            EMA 200:         ${String.format(Locale.US, "%.6f", valorEma200)}
-            ATR (%):         ${String.format(Locale.US, "%.3f", atrP)}%
-            BB UPPER:        ${String.format(Locale.US, "%.6f", valorBbUpper)}
-            BB LOWER:        ${String.format(Locale.US, "%.6f", valorBbLower)}
-            Volumen Ratio:   ${String.format(Locale.US, "%.2f", volRatio)}x
-            $printMuro
-            $printFlujo
-            ESTADO: ${if (razonRechazo.isEmpty()) "SIN SEÑAL TÉCNICA CLARA" else razonRechazo}
-        """.trimIndent()
-
-        enviarDebug(debugMsj)
-    }
-
-    private fun hacerVibrar(senal: String) {
-        val vibrator = getSystemService(Context.VIBRATOR_SERVICE) as Vibrator
-        if (vibrator.hasVibrator()) {
-            val patronLong = longArrayOf(0, 150, 100, 150)
-            val patronShort = longArrayOf(0, 600)
-            val patron = if (senal == "LONG") patronLong else patronShort
-
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                vibrator.vibrate(VibrationEffect.createWaveform(patron, -1))
-            } else {
-                @Suppress("DEPRECATION")
-                vibrator.vibrate(patron, -1)
-            }
+        if (senal != "NEUTRAL") {
+            notificarAlerta(symbol, senal, closeActual, atrActual)
         }
     }
 
-    private fun enviarDebug(msj: String) {
-        val intent = Intent("NUEVO_DEBUG")
-        intent.setPackage(packageName)
-        intent.putExtra("linea_debug", msj)
-        sendBroadcast(intent)
+    private fun notificarAlerta(symbol: String, senal: String, precio: Double, atrValue: Double) {
+        var distSl = atrValue * config.multiplicadorSl
+        val topeMax = precio * 0.008
+        val topeMin = precio * 0.003
+        if (distSl > topeMax) distSl = topeMax
+        if (distSl < topeMin) distSl = topeMin
+
+        val distTp = distSl * config.multiplicadorTp
+        val tp = if (senal == "LONG") precio + distTp else precio - distTp
+        val sl = if (senal == "LONG") precio - distSl else precio + distSl
+
+        val intent = Intent(this, MainActivity::class.java)
+        val pendingIntent = PendingIntent.getActivity(this, 0, intent, PendingIntent.FLAG_IMMUTABLE)
+
+        val notification = NotificationCompat.Builder(this, CHANNEL_ID)
+            .setContentTitle("🎯 Señal: $symbol $senal")
+            .setContentText("Entrada: $precio | TP: ${String.format(Locale.US, "%.4f", tp)} | SL: ${String.format(Locale.US, "%.4f", sl)}")
+            .setSmallIcon(android.R.drawable.ic_dialog_alert)
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setContentIntent(pendingIntent)
+            .setAutoCancel(true)
+            .build()
+
+        val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        manager.notify(symbol.hashCode(), notification)
     }
 
-    override fun onBind(intent: Intent?): IBinder? = null
-
-    override fun onDestroy() {
-        super.onDestroy()
-        isScanning = false
-        webSocket?.cancel()
+    private fun parseTimeframe(tf: String): Duration {
+        return when (tf) {
+            "1m" -> Duration.ofMinutes(1)
+            "3m" -> Duration.ofMinutes(3)
+            "5m" -> Duration.ofMinutes(5)
+            "15m" -> Duration.ofMinutes(15)
+            "1h" -> Duration.ofHours(1)
+            else -> Duration.ofMinutes(5)
+        }
     }
 
     private fun crearCanalNotificacion() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val serviceChannel = NotificationChannel(CHANNEL_ID, "Escáner Nativo", NotificationManager.IMPORTANCE_LOW)
-            getSystemService(NotificationManager::class.java)?.createNotificationChannel(serviceChannel)
+            val channel = NotificationChannel(
+                CHANNEL_ID,
+                "Motor Scanner Trading",
+                NotificationManager.IMPORTANCE_LOW
+            )
+            val manager = getSystemService(NotificationManager::class.java)
+            manager.createNotificationChannel(channel)
         }
     }
 
-    private fun cuandoTimeframeADuration(tf: String): Duration = when(tf) {
-        "1m" -> Duration.ofMinutes(1)
-        "3m" -> Duration.ofMinutes(3)
-        "5m" -> Duration.ofMinutes(5)
-        "15m" -> Duration.ofMinutes(15)
-        "30m" -> Duration.ofMinutes(30)
-             else -> Duration.ofMinutes(3)
+    override fun onDestroy() {
+        super.onDestroy()
+        webSocket?.close(1000, "Servicio detenido")
     }
+
+    override fun onBind(intent: Intent?): IBinder? = null
 }

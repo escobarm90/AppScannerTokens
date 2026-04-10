@@ -1,304 +1,126 @@
 package com.mauri.appscannertokens
 
-import android.widget.Toast
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ArrowBack
-import androidx.compose.material3.*
+import androidx.compose.material.*
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Text
 import androidx.compose.runtime.*
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import java.util.Locale
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun ConfigScreen(viewModel: ConfigViewModel, onBack: () -> Unit) {
-    val context = LocalContext.current
+fun ConfigScreen(
+    currentConfig: UserConfig, // Asumimos que pasas la config desde el ViewModel o SharedPreferences
+    onSaveConfig: (UserConfig) -> Unit
+) {
+    var config by remember { mutableStateOf(currentConfig) }
     val scrollState = rememberScrollState()
 
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .background(Color(0xFF0D1117))
+            .padding(16.dp)
+            .verticalScroll(scrollState)
     ) {
-        TopAppBar(
-            title = { Text("Configuración", color = Color.White) },
-            navigationIcon = {
-                IconButton(onClick = onBack) {
-                    Icon(Icons.Default.ArrowBack, contentDescription = "Atrás", tint = Color.White)
-                }
-            },
-            colors = TopAppBarDefaults.topAppBarColors(containerColor = Color(0xFF161B22))
-        )
+        Text("📡 AppScannerTokens - Bot", fontSize = 24.sp, fontWeight = FontWeight.Bold, color = Color(0xFF58a6ff))
+        Spacer(modifier = Modifier.height(16.dp))
 
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .verticalScroll(scrollState)
-                .padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp)
-        ) {
-
-            Text("Conexión Binance", color = Color(0xFF2EA043), fontWeight = FontWeight.Bold, fontSize = 18.sp)
-
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                colors = CardDefaults.cardColors(containerColor = Color(0xFF161B22)),
-                shape = RoundedCornerShape(8.dp)
-            ) {
-                Text(
-                    text = "Saldo de la billetera : Puede crear una Api Key en su cuenta de binance unicamente habilitando solo el permiso de “Enable Reading” para que la aplicacion sepa en tiempo real el saldo exacto de su billetera y pueda ser mas preciso con los calculos pero al mismo tiempo sea seguro en cuanto a que lo unico que puede hacer con esa api es leer el saldo, no corre ningun riesgo.",
-                    color = Color(0xFF8B949E),
-                    fontSize = 13.sp,
-                    modifier = Modifier.padding(12.dp)
-                )
-            }
-
-            OutlinedTextField(
-                value = viewModel.apiKey,
-                onValueChange = { viewModel.apiKey = it },
-                label = { Text("API Key") },
-                modifier = Modifier.fillMaxWidth(),
-                visualTransformation = PasswordVisualTransformation(),
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
-                colors = OutlinedTextFieldDefaults.colors(focusedTextColor = Color.White, unfocusedTextColor = Color.Gray)
-            )
-
-            OutlinedTextField(
-                value = viewModel.secretKey,
-                onValueChange = { viewModel.secretKey = it },
-                label = { Text("Secret Key") },
-                modifier = Modifier.fillMaxWidth(),
-                visualTransformation = PasswordVisualTransformation(),
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
-                colors = OutlinedTextFieldDefaults.colors(focusedTextColor = Color.White, unfocusedTextColor = Color.Gray)
-            )
-
-            Button(
-                onClick = { viewModel.validarCredenciales() },
-                modifier = Modifier.fillMaxWidth(),
-                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1F6FEB)),
-                enabled = !viewModel.validandoApi
-            ) {
-                Text(if (viewModel.validandoApi) "Comprobando..." else "Validar API de Binance", color = Color.White)
-            }
-
-            if (viewModel.mensajeValidacion.isNotEmpty()) {
-                Text(
-                    text = viewModel.mensajeValidacion,
-                    color = if (viewModel.mensajeValidacion.contains("✅")) Color(0xFF2EA043) else Color(0xFFF85149),
-                    fontSize = 14.sp
-                )
-            }
-
-            HorizontalDivider(color = Color(0xFF30363D), modifier = Modifier.padding(vertical = 4.dp))
-
-            Text("Estrategia y Riesgo", color = Color(0xFF2EA043), fontWeight = FontWeight.Bold, fontSize = 18.sp)
-
-            DropdownTimeframe(
-                selected = viewModel.timeframe,
-                onSelectedChange = { viewModel.timeframe = it },
-                modifier = Modifier.fillMaxWidth()
-            )
-
-            StepperField(
-                label = "Apalancamiento (x)",
-                value = viewModel.apalancamiento,
-                onValueChange = { viewModel.apalancamiento = it },
-                step = 1f,
-                min = 1f,
-                modifier = Modifier.fillMaxWidth()
-            )
-
-            StepperField(
-                label = "% Billetera a Usar (Margen)",
-                value = viewModel.tamanoPosPct,
-                onValueChange = { viewModel.tamanoPosPct = it },
-                step = 1f,
-                min = 1f,
-                modifier = Modifier.fillMaxWidth()
-            )
-
-            StepperField(
-                label = "% Pérdida Max a Asumir (SL)",
-                value = viewModel.perdidaMaxPct,
-                onValueChange = { viewModel.perdidaMaxPct = it },
-                step = 0.5f,
-                min = 0.5f,
-                modifier = Modifier.fillMaxWidth()
-            )
-
-            StepperField(
-                label = "ROI Mínimo (%)",
-                value = viewModel.roiMinimo,
-                onValueChange = { viewModel.roiMinimo = it },
-                step = 1f,
-                min = 1f,
-                modifier = Modifier.fillMaxWidth()
-            )
-
-            OutlinedTextField(
-                value = viewModel.billeteraManual,
-                onValueChange = { viewModel.billeteraManual = it },
-                label = { Text("Billetera Simulada ($)", fontSize = 12.sp) },
-                modifier = Modifier.fillMaxWidth(),
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                colors = OutlinedTextFieldDefaults.colors(focusedTextColor = Color.White, unfocusedTextColor = Color.Gray)
-            )
-
-            Text("Tipo de Margen", color = Color.White, fontSize = 14.sp)
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Button(
-                    onClick = { viewModel.tipoMargen = "ISOLATED" },
-                    modifier = Modifier.weight(1f),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = if (viewModel.tipoMargen == "ISOLATED") Color(0xFF2EA043) else Color(0xFF30363D)
-                    )
-                ) {
-                    Text("Aislado", color = Color.White)
-                }
-                Button(
-                    onClick = { viewModel.tipoMargen = "CROSS" },
-                    modifier = Modifier.weight(1f),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = if (viewModel.tipoMargen == "CROSS") Color(0xFF2EA043) else Color(0xFF30363D)
-                    )
-                ) {
-                    Text("Cruzado", color = Color.White)
-                }
-            }
-
-            Spacer(modifier = Modifier.height(16.dp))
-
-            Button(
-                onClick = {
-                    viewModel.guardarConfiguracion()
-                    Toast.makeText(context, "Configuración guardada", Toast.LENGTH_SHORT).show()
-                    onBack()
-                },
-                modifier = Modifier.fillMaxWidth().height(50.dp),
-                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2EA043))
-            ) {
-                Text("Guardar y Volver", fontSize = 16.sp, fontWeight = FontWeight.Bold, color = Color.White)
-            }
-
-            Spacer(modifier = Modifier.height(30.dp))
-        }
-    }
-}
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-fun DropdownTimeframe(
-    selected: String,
-    onSelectedChange: (String) -> Unit,
-    modifier: Modifier = Modifier
-) {
-    var expanded by remember { mutableStateOf(false) }
-    val options = listOf("3m", "5m", "10m", "15m", "30m")
-
-    ExposedDropdownMenuBox(
-        expanded = expanded,
-        onExpandedChange = { expanded = !expanded },
-        modifier = modifier
-    ) {
+        // --- CREDENCIALES ---
+        Text("🔑 Credenciales Binance", fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
         OutlinedTextField(
-            value = selected,
-            onValueChange = {},
-            readOnly = true,
-            label = { Text("Timeframe", fontSize = 12.sp) },
-            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
-            modifier = Modifier.menuAnchor().fillMaxWidth(),
-            colors = OutlinedTextFieldDefaults.colors(
-                focusedTextColor = Color.White,
-                unfocusedTextColor = Color.White,
-                focusedBorderColor = Color(0xFF2EA043)
-            )
+            value = config.apiKey,
+            onValueChange = { config = config.copy(apiKey = it) },
+            label = { Text("API Key") },
+            modifier = Modifier.fillMaxWidth(),
+            singleLine = true
         )
-        ExposedDropdownMenu(
-            expanded = expanded,
-            onDismissRequest = { expanded = false },
-            modifier = Modifier.background(Color(0xFF161B22))
-        ) {
-            options.forEach { option ->
-                DropdownMenuItem(
-                    text = { Text(option, color = Color.White) },
-                    onClick = {
-                        onSelectedChange(option)
-                        expanded = false
-                    }
-                )
-            }
-        }
-    }
-}
+        OutlinedTextField(
+            value = config.apiSecret,
+            onValueChange = { config = config.copy(apiSecret = it) },
+            label = { Text("API Secret") },
+            modifier = Modifier.fillMaxWidth(),
+            visualTransformation = PasswordVisualTransformation(),
+            singleLine = true
+        )
 
-@Composable
-fun StepperField(
-    label: String,
-    value: String,
-    onValueChange: (String) -> Unit,
-    step: Float,
-    min: Float = 0f,
-    modifier: Modifier = Modifier
-) {
-    val numValue = value.toFloatOrNull() ?: 0f
-    Column(modifier = modifier) {
-        Text(label, color = Color.White, fontSize = 12.sp, modifier = Modifier.padding(bottom = 4.dp))
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier
-                .fillMaxWidth()
-                .background(Color(0xFF161B22), shape = RoundedCornerShape(8.dp))
-                .padding(horizontal = 4.dp)
-        ) {
-            TextButton(
-                onClick = {
-                    val newVal = maxOf(min, numValue - step)
-                    onValueChange(String.format(Locale.US, "%.1f", newVal).replace(".0", ""))
-                },
-                contentPadding = PaddingValues(0.dp),
-                modifier = Modifier.width(50.dp)
-            ) {
-                Text("-", color = Color(0xFF2EA043), fontSize = 24.sp, fontWeight = FontWeight.Bold)
-            }
+        Divider(modifier = Modifier.padding(vertical = 16.dp))
 
+        // --- GESTIÓN DE CAPITAL ---
+        Text("🏦 Gestión de Capital", fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             OutlinedTextField(
-                value = value,
-                onValueChange = onValueChange,
+                value = config.porcentajeInversion.toString(),
+                onValueChange = { config = config.copy(porcentajeInversion = it.toDoubleOrNull() ?: 0.3) },
+                label = { Text("% Inversión (Ej: 0.3)") },
                 modifier = Modifier.weight(1f),
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                textStyle = LocalTextStyle.current.copy(textAlign = TextAlign.Center, color = Color.White),
-                colors = OutlinedTextFieldDefaults.colors(
-                    focusedBorderColor = Color.Transparent,
-                    unfocusedBorderColor = Color.Transparent,
-                ),
-                singleLine = true
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
             )
-
-            TextButton(
-                onClick = {
-                    val newVal = numValue + step
-                    onValueChange(String.format(Locale.US, "%.1f", newVal).replace(".0", ""))
-                },
-                contentPadding = PaddingValues(0.dp),
-                modifier = Modifier.width(50.dp)
-            ) {
-                Text("+", color = Color(0xFF2EA043), fontSize = 24.sp, fontWeight = FontWeight.Bold)
-            }
+            OutlinedTextField(
+                value = config.apalancamiento.toString(),
+                onValueChange = { config = config.copy(apalancamiento = it.toIntOrNull() ?: 20) },
+                label = { Text("Apalancamiento") },
+                modifier = Modifier.weight(1f),
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
+            )
         }
+
+        Divider(modifier = Modifier.padding(vertical = 16.dp))
+
+        // --- ESTRATEGIA SCALPER ---
+        Text("⚙️ Estrategia Scalper", fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedTextField(
+                value = config.multiplicadorSl.toString(),
+                onValueChange = { config = config.copy(multiplicadorSl = it.toDoubleOrNull() ?: 1.5) },
+                label = { Text("Multiplicador SL (ATR)") },
+                modifier = Modifier.weight(1f),
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
+            )
+            OutlinedTextField(
+                value = config.multiplicadorTp.toString(),
+                onValueChange = { config = config.copy(multiplicadorTp = it.toDoubleOrNull() ?: 1.0) },
+                label = { Text("Ratio TP (R:B)") },
+                modifier = Modifier.weight(1f),
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
+            )
+        }
+
+        Spacer(modifier = Modifier.height(8.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedTextField(
+                value = config.minRatioVol.toString(),
+                onValueChange = { config = config.copy(minRatioVol = it.toDoubleOrNull() ?: 0.6) },
+                label = { Text("Min Ratio Vol") },
+                modifier = Modifier.weight(1f),
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
+            )
+            OutlinedTextField(
+                value = config.minVolatilidadPct.toString(),
+                onValueChange = { config = config.copy(minVolatilidadPct = it.toDoubleOrNull() ?: 0.25) },
+                label = { Text("Min Volatilidad %") },
+                modifier = Modifier.weight(1f),
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
+            )
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+        Button(
+            onClick = { onSaveConfig(config) },
+            modifier = Modifier.fillMaxWidth(),
+            colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF2ea043), contentColor = Color.White)
+        ) {
+            Text("GUARDAR Y REINICIAR MOTOR", fontWeight = FontWeight.Bold, modifier = Modifier.padding(8.dp))
+        }
+        Spacer(modifier = Modifier.height(32.dp))
     }
 }
