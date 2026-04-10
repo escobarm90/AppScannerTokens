@@ -292,9 +292,11 @@ class TradingScannerService : Service() {
 
         try {
             if (tokenData.series.barCount > 0 && tokenData.series.lastBar.endTime.isEqual(endZoned)) {
-                tokenData.series.addBar(bar, true) // Reemplaza la última
-                // Solo evaluamos si estamos cerca del cierre para ahorrar CPU
-                // evaluateStrategy(symbol, tokenData) // Opcional: Descomentar si quieres ticks intradiarios
+                tokenData.series.addBar(bar, true)
+
+                // EVALUACIÓN EN TIEMPO REAL (Vela viva)
+                evaluateStrategy(symbol, tokenData)
+
             } else if (isClosed) {
                 tokenData.series.addBar(bar)
                 evaluateStrategy(symbol, tokenData)
