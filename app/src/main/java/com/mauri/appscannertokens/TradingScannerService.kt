@@ -1,5 +1,6 @@
 package com.mauri.appscannertokens
 
+import kotlinx.coroutines.*
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
@@ -27,6 +28,7 @@ import java.time.Instant
 import java.time.ZoneId
 import java.time.ZonedDateTime
 import java.util.Locale
+
 
 class TradingScannerService : Service() {
 
@@ -80,14 +82,31 @@ class TradingScannerService : Service() {
         val topSymbols = obtenerTopPares()
         val duration = parseTimeframe(config.timeframe)
 
-        topSymbols.forEach { symbol ->
-            val series = BaseBarSeriesBuilder().withName(symbol).build()
-            series.maximumBarCount = 300
-            descargarHistorial(symbol, config.timeframe, series, duration)
-            marketData[symbol] = series
-        }
+        Log.d("Scanner", "Descargando historial para ${topSymbols.size} monedas usando Corrutinas...")
 
-        conectarWebSocket(topSymbols, duration)
+        // Iniciamos un alcance de corrutinas optimizado para red (IO)
+        CoroutineScope(Dispatchers.IO).launch {
+
+            // Lanzamos todas las descargas en paralelo
+            val descargas = topSymbols.map { symbol ->
+                async {
+                    val series = BaseBarSeriesBuilder().withName(symbol).build()
+                    series.maximumBarCount = 300
+                    descargarHistorial(symbol, config.timeframe, series, duration)
+
+                    // Sincronizamos la escritura para evitar choques en memoria
+                    synchronized(marketData) {
+                        marketData[symbol] = series
+                    }
+                }
+            }
+
+            // awaitAll() pausa esta línea hasta que las 50 monedas hayan terminado de descargar
+            descargas.awaitAll()
+
+            Log.d("Scanner", "¡Historial descargado con éxito! Iniciando WebSockets...")
+            conectarWebSocket(topSymbols, duration)
+        }
     }
 
     private fun obtenerTopPares(): List<String> {
@@ -132,6 +151,8 @@ class TradingScannerService : Service() {
                     )
                     series.addBar(bar)
                 }
+                // LOG VITAL para confirmar visualmente que el hilo no está trabado
+                Log.d("Scanner", "--- HISTORIAL OK: $symbol ---")
             }
         } catch (e: Exception) {
             Log.e("Scanner", "Error descargando historial para $symbol: ${e.message}")
