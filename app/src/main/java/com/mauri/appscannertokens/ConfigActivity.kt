@@ -5,16 +5,33 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.viewModels
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
 
 class ConfigActivity : ComponentActivity() {
 
+    // Inicializamos el ViewModel
     private val viewModel: ConfigViewModel by viewModels()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
         setContent {
             MaterialTheme {
-                ConfigScreen(viewModel = viewModel, onBack = { finish() })
+                // 1. Observamos el estado (la configuración actual) desde el ViewModel
+                val currentConfig by viewModel.configState.collectAsState()
+
+                // 2. Llamamos a la pantalla con los parámetros correctos
+                ConfigScreen(
+                    currentConfig = currentConfig,
+                    onSaveConfig = { configModificada ->
+                        // Guardamos la configuración nueva
+                        viewModel.guardarConfiguracion(configModificada)
+
+                        // Cerramos la actividad de configuración para volver atrás
+                        finish()
+                    }
+                )
             }
         }
     }

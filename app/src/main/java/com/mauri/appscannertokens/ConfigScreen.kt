@@ -4,11 +4,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.*
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Text
+import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -18,9 +14,10 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ConfigScreen(
-    currentConfig: UserConfig, // Asumimos que pasas la config desde el ViewModel o SharedPreferences
+    currentConfig: UserConfig,
     onSaveConfig: (UserConfig) -> Unit
 ) {
     var config by remember { mutableStateOf(currentConfig) }
@@ -53,7 +50,7 @@ fun ConfigScreen(
             singleLine = true
         )
 
-        Divider(modifier = Modifier.padding(vertical = 16.dp))
+        HorizontalDivider(modifier = Modifier.padding(vertical = 16.dp))
 
         // --- GESTIÓN DE CAPITAL ---
         Text("🏦 Gestión de Capital", fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
@@ -74,7 +71,7 @@ fun ConfigScreen(
             )
         }
 
-        Divider(modifier = Modifier.padding(vertical = 16.dp))
+        HorizontalDivider(modifier = Modifier.padding(vertical = 16.dp))
 
         // --- ESTRATEGIA SCALPER ---
         Text("⚙️ Estrategia Scalper", fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
@@ -82,7 +79,7 @@ fun ConfigScreen(
             OutlinedTextField(
                 value = config.multiplicadorSl.toString(),
                 onValueChange = { config = config.copy(multiplicadorSl = it.toDoubleOrNull() ?: 1.5) },
-                label = { Text("Multiplicador SL (ATR)") },
+                label = { Text("Mult. SL (ATR)") },
                 modifier = Modifier.weight(1f),
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
             )
@@ -107,7 +104,7 @@ fun ConfigScreen(
             OutlinedTextField(
                 value = config.minVolatilidadPct.toString(),
                 onValueChange = { config = config.copy(minVolatilidadPct = it.toDoubleOrNull() ?: 0.25) },
-                label = { Text("Min Volatilidad %") },
+                label = { Text("Min Volatil. %") },
                 modifier = Modifier.weight(1f),
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
             )
@@ -117,7 +114,7 @@ fun ConfigScreen(
         Button(
             onClick = { onSaveConfig(config) },
             modifier = Modifier.fillMaxWidth(),
-            colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF2ea043), contentColor = Color.White)
+            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2ea043), contentColor = Color.White)
         ) {
             Text("GUARDAR Y REINICIAR MOTOR", fontWeight = FontWeight.Bold, modifier = Modifier.padding(8.dp))
         }

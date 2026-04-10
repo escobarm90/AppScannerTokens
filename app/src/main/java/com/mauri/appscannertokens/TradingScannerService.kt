@@ -11,7 +11,6 @@ import android.os.IBinder
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import com.google.gson.Gson
-import com.google.gson.JsonObject
 import com.google.gson.JsonParser
 import okhttp3.*
 import org.ta4j.core.BaseBar
@@ -118,18 +117,18 @@ class TradingScannerService : Service() {
                 val klines = JsonParser.parseString(body).asJsonArray
                 for (k in klines) {
                     val kline = k.asJsonArray
-                    val endTime = Instant.ofEpochMilli(kline.get(6).asLong)
+                    // TA4J requiere ZonedDateTime, no Instant
+                    val endTime = ZonedDateTime.ofInstant(Instant.ofEpochMilli(kline.get(6).asLong), ZoneId.of("UTC"))
+
                     val bar = BaseBar(
                         duration,
-                        endTime.minus(duration),
                         endTime,
                         DoubleNum.valueOf(kline.get(1).asDouble),
                         DoubleNum.valueOf(kline.get(2).asDouble),
                         DoubleNum.valueOf(kline.get(3).asDouble),
                         DoubleNum.valueOf(kline.get(4).asDouble),
                         DoubleNum.valueOf(kline.get(5).asDouble),
-                        DoubleNum.valueOf(0.0), // amount
-                        0L // trades
+                        DoubleNum.valueOf(0.0) // amount
                     )
                     series.addBar(bar)
                 }
@@ -152,7 +151,7 @@ class TradingScannerService : Service() {
                     if (!json.has("data")) return
                     val data = json.getAsJsonObject("data")
                     val kline = data.getAsJsonObject("k")
-                    
+
                     val symbol = data.get("s").asString
                     val isKLineClosed = kline.get("x").asBoolean
                     val closePrice = kline.get("c").asDouble
@@ -177,27 +176,25 @@ class TradingScannerService : Service() {
     }
 
     private fun actualizarVela(
-        symbol: String, open: Double, high: Double, low: Double, close: Double, 
+        symbol: String, open: Double, high: Double, low: Double, close: Double,
         volume: Double, closeTime: Long, isClosed: Boolean, duration: Duration
     ) {
         val series = marketData[symbol] ?: return
-        val endInstant = Instant.ofEpochMilli(closeTime)
+        val endZoned = ZonedDateTime.ofInstant(Instant.ofEpochMilli(closeTime), ZoneId.of("UTC"))
 
         val bar = BaseBar(
             duration,
-            endInstant.minus(duration),
-            endInstant,
+            endZoned,
             DoubleNum.valueOf(open),
             DoubleNum.valueOf(high),
             DoubleNum.valueOf(low),
             DoubleNum.valueOf(close),
             DoubleNum.valueOf(volume),
-            DoubleNum.valueOf(0.0), // amount
-            0L // trades
+            DoubleNum.valueOf(0.0) // amount
         )
 
         try {
-            if (series.barCount > 0 && series.lastBar.endTime.toInstant() == endInstant) {
+            if (series.barCount > 0 && series.lastBar.endTime.isEqual(endZoned)) {
                 series.addBar(bar, true) // Reemplazar última si es el mismo tiempo
             } else if (isClosed) {
                 series.addBar(bar)
@@ -210,7 +207,7 @@ class TradingScannerService : Service() {
 
     private fun evaluateStrategy(symbol: String, series: BaseBarSeries) {
         if (series.barCount < 200) return
-        
+
         val closePriceInd = ClosePriceIndicator(series)
         val rsi = RSIIndicator(closePriceInd, 14)
         val ema7 = EMAIndicator(closePriceInd, 7)

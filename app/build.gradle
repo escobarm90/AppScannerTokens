@@ -61,7 +61,7 @@ dependencies {
     implementation 'androidx.lifecycle:lifecycle-viewmodel-compose:2.8.4'
 
     // Trading Indicators (ta4j)
-    implementation 'org.ta4j:ta4j-core:0.22.4'
+    implementation 'org.ta4j:ta4j-core:0.15'
 
 
     // Networking & JSON
