@@ -1,6 +1,5 @@
 package com.mauri.appscannertokens
 
-import kotlinx.coroutines.*
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
@@ -13,6 +12,12 @@ import android.util.Log
 import androidx.core.app.NotificationCompat
 import com.google.gson.Gson
 import com.google.gson.JsonParser
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.launch
 import okhttp3.*
 import org.ta4j.core.BaseBar
 import org.ta4j.core.BaseBarSeries
@@ -22,17 +27,22 @@ import org.ta4j.core.indicators.RSIIndicator
 import org.ta4j.core.indicators.adx.ADXIndicator
 import org.ta4j.core.indicators.helpers.ClosePriceIndicator
 import org.ta4j.core.indicators.ATRIndicator
-import org.ta4j.core.num.DoubleNum
+import org.ta4j.core.num.DecimalNum
 import java.time.Duration
 import java.time.Instant
 import java.time.ZoneId
 import java.time.ZonedDateTime
 import java.util.Locale
-
+import java.util.concurrent.TimeUnit
 
 class TradingScannerService : Service() {
 
-    private val client = OkHttpClient()
+    // Cliente HTTP con tiempos de espera ampliados (20s) para evitar cuelgues
+    private val client = OkHttpClient.Builder()
+        .connectTimeout(20, TimeUnit.SECONDS)
+        .readTimeout(20, TimeUnit.SECONDS)
+        .build()
+
     private val gson = Gson()
     private lateinit var config: UserConfig
     private var webSocket: WebSocket? = null
@@ -59,9 +69,10 @@ class TradingScannerService : Service() {
             .build()
         startForeground(NOTIFICATION_ID, notification)
 
-        Thread {
+        // Arrancamos el motor usando el hilo de fondo de Android (Corrutinas IO)
+        CoroutineScope(Dispatchers.IO).launch {
             iniciarMotorEscaner()
-        }.start()
+        }
 
         return START_STICKY
     }
@@ -76,40 +87,38 @@ class TradingScannerService : Service() {
         }
     }
 
-    private fun iniciarMotorEscaner() {
+    // Usamos suspend y coroutineScope para garantizar la descarga en paralelo real
+    private suspend fun iniciarMotorEscaner() = coroutineScope {
         Log.d("Scanner", "Iniciando motor Multiusuario...")
 
         val topSymbols = obtenerTopPares()
         val duration = parseTimeframe(config.timeframe)
 
-        Log.d("Scanner", "Descargando historial para ${topSymbols.size} monedas usando Corrutinas...")
+        Log.d("Scanner", "Descargando historial para ${topSymbols.size} monedas usando Corrutinas en paralelo...")
 
-        // Iniciamos un alcance de corrutinas optimizado para red (IO)
-        CoroutineScope(Dispatchers.IO).launch {
+        // Descarga multihilo: Lanzamos las 50 peticiones a la vez
+        val descargas = topSymbols.map { symbol ->
+            async(Dispatchers.IO) {
+                val series = BaseBarSeriesBuilder().withName(symbol).build()
+                series.maximumBarCount = 300
+                descargarHistorial(symbol, config.timeframe, series, duration)
 
-            // Lanzamos todas las descargas en paralelo
-            val descargas = topSymbols.map { symbol ->
-                async {
-                    val series = BaseBarSeriesBuilder().withName(symbol).build()
-                    series.maximumBarCount = 300
-                    descargarHistorial(symbol, config.timeframe, series, duration)
-
-                    // Sincronizamos la escritura para evitar choques en memoria
-                    synchronized(marketData) {
-                        marketData[symbol] = series
-                    }
+                // Evitamos choques de memoria al escribir en el mapa
+                synchronized(marketData) {
+                    marketData[symbol] = series
                 }
             }
-
-            // awaitAll() pausa esta línea hasta que las 50 monedas hayan terminado de descargar
-            descargas.awaitAll()
-
-            Log.d("Scanner", "¡Historial descargado con éxito! Iniciando WebSockets...")
-            conectarWebSocket(topSymbols, duration)
         }
+
+        // Esperamos a que terminen las 50 descargas antes de avanzar
+        descargas.awaitAll()
+
+        Log.d("Scanner", "¡Historial descargado con éxito! Conectando a WebSockets de Binance...")
+        conectarWebSocket(topSymbols, duration)
     }
 
     private fun obtenerTopPares(): List<String> {
+        Log.d("Scanner", "Conectando a Binance para obtener TOP pares...")
         val request = Request.Builder().url("https://fapi.binance.com/fapi/v1/ticker/24hr").build()
         return try {
             client.newCall(request).execute().use { response ->
@@ -132,26 +141,28 @@ class TradingScannerService : Service() {
         val request = Request.Builder().url(url).build()
         try {
             client.newCall(request).execute().use { response ->
+                if (!response.isSuccessful) {
+                    Log.e("Scanner", "Error HTTP ${response.code} para $symbol")
+                    return
+                }
                 val body = response.body?.string() ?: return
                 val klines = JsonParser.parseString(body).asJsonArray
                 for (k in klines) {
                     val kline = k.asJsonArray
-                    // TA4J requiere ZonedDateTime, no Instant
                     val endTime = ZonedDateTime.ofInstant(Instant.ofEpochMilli(kline.get(6).asLong), ZoneId.of("UTC"))
 
                     val bar = BaseBar(
                         duration,
                         endTime,
-                        DoubleNum.valueOf(kline.get(1).asDouble),
-                        DoubleNum.valueOf(kline.get(2).asDouble),
-                        DoubleNum.valueOf(kline.get(3).asDouble),
-                        DoubleNum.valueOf(kline.get(4).asDouble),
-                        DoubleNum.valueOf(kline.get(5).asDouble),
-                        DoubleNum.valueOf(0.0) // amount
+                        DecimalNum.valueOf(kline.get(1).asDouble),
+                        DecimalNum.valueOf(kline.get(2).asDouble),
+                        DecimalNum.valueOf(kline.get(3).asDouble),
+                        DecimalNum.valueOf(kline.get(4).asDouble),
+                        DecimalNum.valueOf(kline.get(5).asDouble),
+                        DecimalNum.valueOf(0.0)
                     )
                     series.addBar(bar)
                 }
-                // LOG VITAL para confirmar visualmente que el hilo no está trabado
                 Log.d("Scanner", "--- HISTORIAL OK: $symbol ---")
             }
         } catch (e: Exception) {
@@ -206,17 +217,17 @@ class TradingScannerService : Service() {
         val bar = BaseBar(
             duration,
             endZoned,
-            DoubleNum.valueOf(open),
-            DoubleNum.valueOf(high),
-            DoubleNum.valueOf(low),
-            DoubleNum.valueOf(close),
-            DoubleNum.valueOf(volume),
-            DoubleNum.valueOf(0.0) // amount
+            DecimalNum.valueOf(open),
+            DecimalNum.valueOf(high),
+            DecimalNum.valueOf(low),
+            DecimalNum.valueOf(close),
+            DecimalNum.valueOf(volume),
+            DecimalNum.valueOf(0.0)
         )
 
         try {
             if (series.barCount > 0 && series.lastBar.endTime.isEqual(endZoned)) {
-                series.addBar(bar, true) // Reemplazar última si es el mismo tiempo
+                series.addBar(bar, true)
             } else if (isClosed) {
                 series.addBar(bar)
                 evaluateStrategy(symbol, series)
