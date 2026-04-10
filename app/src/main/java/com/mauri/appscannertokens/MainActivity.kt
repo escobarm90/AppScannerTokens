@@ -1,5 +1,6 @@
 package com.mauri.appscannertokens
 
+import android.content.Context
 import android.content.Intent
 import android.os.Bundle
 import androidx.activity.ComponentActivity
@@ -17,10 +18,10 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
+import com.google.gson.Gson
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -33,11 +34,25 @@ class MainActivity : ComponentActivity() {
     }
 }
 
+// Función auxiliar para leer los parámetros guardados en el celular
+fun cargarConfiguracion(context: Context): UserConfig {
+    val prefs = context.getSharedPreferences("AppScannerConfig", Context.MODE_PRIVATE)
+    val jsonGuardado = prefs.getString("config_data", null)
+    return if (jsonGuardado != null) {
+        Gson().fromJson(jsonGuardado, UserConfig::class.java)
+    } else {
+        UserConfig()
+    }
+}
+
 @Composable
 fun MonitorScreen(onOpenConfig: () -> Unit) {
     val alertas by AlertManager.alertas.collectAsState()
     val logsConsola by AlertManager.logs.collectAsState()
     val context = LocalContext.current
+
+    // Carga inicial de la configuración para la AlertCard
+    var config by remember { mutableStateOf(cargarConfiguracion(context)) }
 
     val colorFondo = Color(0xFF0d1117)
     val colorCard = Color(0xFF161b22)
@@ -103,7 +118,15 @@ fun MonitorScreen(onOpenConfig: () -> Unit) {
         Column(modifier = Modifier.fillMaxSize()) {
 
             // 1. ZONA DE ALERTAS
-            Text("ÚLTIMAS OPORTUNIDADES", color = Color.Gray, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                Text("ÚLTIMAS OPORTUNIDADES", color = Color.Gray, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+
+                // Botón práctico para recargar los parámetros sin cerrar la app
+                TextButton(onClick = { config = cargarConfiguracion(context) }) {
+                    Text("🔄 Refrescar Config", color = Color(0xFF58a6ff), fontSize = 10.sp)
+                }
+            }
+
             Spacer(modifier = Modifier.height(8.dp))
 
             Box(modifier = Modifier.weight(if (isDebugEnabled) 0.5f else 1f).fillMaxWidth()) {
@@ -112,7 +135,14 @@ fun MonitorScreen(onOpenConfig: () -> Unit) {
                 } else {
                     LazyColumn(modifier = Modifier.fillMaxSize()) {
                         items(alertas) { alerta ->
-                            AlertCard(alerta = alerta, onDismiss = { AlertManager.removerAlerta(alerta) })
+
+                            // AQUÍ PASAMOS LA CONFIGURACIÓN A LA TARJETA
+                            AlertCard(
+                                alerta = alerta,
+                                config = config,
+                                onDismiss = { AlertManager.removerAlerta(alerta) }
+                            )
+
                         }
                     }
                 }
@@ -131,12 +161,12 @@ fun MonitorScreen(onOpenConfig: () -> Unit) {
                 ) {
                     LazyColumn(
                         modifier = Modifier.fillMaxSize().padding(8.dp),
-                        reverseLayout = true // Hace que el texto nuevo empuje desde abajo hacia arriba (Efecto Matrix)
+                        reverseLayout = true // Efecto consola: lo nuevo empuja desde abajo
                     ) {
                         items(logsConsola) { logMsg ->
                             Text(
                                 text = logMsg,
-                                color = Color(0xFF00FF00), // Verde Neón
+                                color = Color(0xFF00FF00), // Verde Terminal
                                 fontFamily = FontFamily.Monospace,
                                 fontSize = 10.sp,
                                 lineHeight = 14.sp

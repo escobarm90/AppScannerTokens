@@ -12,12 +12,7 @@ import android.util.Log
 import androidx.core.app.NotificationCompat
 import com.google.gson.Gson
 import com.google.gson.JsonParser
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.async
-import kotlinx.coroutines.awaitAll
-import kotlinx.coroutines.coroutineScope
-import kotlinx.coroutines.launch
+import kotlinx.coroutines.*
 import okhttp3.*
 import org.ta4j.core.BaseBar
 import org.ta4j.core.BaseBarSeries
@@ -26,7 +21,14 @@ import org.ta4j.core.indicators.EMAIndicator
 import org.ta4j.core.indicators.RSIIndicator
 import org.ta4j.core.indicators.adx.ADXIndicator
 import org.ta4j.core.indicators.helpers.ClosePriceIndicator
+import org.ta4j.core.indicators.helpers.VolumeIndicator
 import org.ta4j.core.indicators.ATRIndicator
+import org.ta4j.core.indicators.MACDIndicator
+import org.ta4j.core.indicators.SMAIndicator
+import org.ta4j.core.indicators.statistics.StandardDeviationIndicator
+import org.ta4j.core.indicators.bollinger.BollingerBandsLowerIndicator
+import org.ta4j.core.indicators.bollinger.BollingerBandsUpperIndicator
+import org.ta4j.core.indicators.bollinger.BollingerBandsMiddleIndicator
 import org.ta4j.core.num.DecimalNum
 import java.time.Duration
 import java.time.Instant
@@ -34,10 +36,40 @@ import java.time.ZoneId
 import java.time.ZonedDateTime
 import java.util.Locale
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.ConcurrentHashMap
+
+// =========================================================================
+// ESTRUCTURA OPTIMIZADA: Guardamos los indicadores en memoria (Caché)
+// =========================================================================
+class TokenData(symbol: String) {
+    val series: BaseBarSeries = BaseBarSeriesBuilder().withName(symbol).build().apply {
+        maximumBarCount = 300
+    }
+
+    // Al instanciar los indicadores una sola vez, TA4J usa su caché interno
+    // y evita recalcular toda la historia cada vez que llega un tick.
+    val closePrice = ClosePriceIndicator(series)
+    val volumeInd = VolumeIndicator(series)
+
+    val rsi = RSIIndicator(closePrice, 14)
+    val atr = ATRIndicator(series, 7)
+    val ema7 = EMAIndicator(closePrice, 7)
+    val ema200 = EMAIndicator(closePrice, 200)
+    val volSma = SMAIndicator(volumeInd, 20)
+    val adx = ADXIndicator(series, 14)
+
+    val stdDev = StandardDeviationIndicator(closePrice, 20)
+    val sma20 = SMAIndicator(closePrice, 20)
+    val bbMiddle = BollingerBandsMiddleIndicator(sma20)
+    val bbUpper = BollingerBandsUpperIndicator(bbMiddle, stdDev, DecimalNum.valueOf("2.0"))
+    val bbLower = BollingerBandsLowerIndicator(bbMiddle, stdDev, DecimalNum.valueOf("2.0"))
+
+    val macdLine = MACDIndicator(closePrice, 12, 26)
+    val macdSignal = EMAIndicator(macdLine, 9)
+}
 
 class TradingScannerService : Service() {
 
-    // Cliente HTTP con tiempos de espera ampliados para evitar bloqueos
     private val client = OkHttpClient.Builder()
         .connectTimeout(20, TimeUnit.SECONDS)
         .readTimeout(20, TimeUnit.SECONDS)
@@ -47,14 +79,19 @@ class TradingScannerService : Service() {
     private lateinit var config: UserConfig
     private var webSocket: WebSocket? = null
 
-    // Mapa para almacenar el historial de velas en la memoria RAM
-    private val marketData = mutableMapOf<String, BaseBarSeries>()
+    // Usamos ConcurrentHashMap por seguridad en Multihilo
+    private val marketData = ConcurrentHashMap<String, TokenData>()
+    private val spreadCache = ConcurrentHashMap<String, Double>()
+    private val registroBloqueo = ConcurrentHashMap<String, Long>()
+
+    private var billeteraVirtualUsdt = 20.0
+
+    // Control de velocidad del Logcat para no saturar la pantalla de Compose
+    private var lastLogTime = System.currentTimeMillis()
 
     companion object {
         const val CHANNEL_ID = "TradingScannerChannel"
         const val NOTIFICATION_ID = 1
-
-        // Variables globales controladas por los switches en la MainActivity
         var isRunning = false
         var isDebugMode = true
     }
@@ -68,7 +105,6 @@ class TradingScannerService : Service() {
         config = cargarConfiguracion()
         isRunning = true
 
-        // Mantener el servicio vivo en segundo plano (Foreground Service)
         val notification = NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("Escáner Activo")
             .setContentText("Buscando oportunidades en Binance (${config.timeframe})")
@@ -76,7 +112,6 @@ class TradingScannerService : Service() {
             .build()
         startForeground(NOTIFICATION_ID, notification)
 
-        // Arrancamos el motor en un hilo secundario de Corrutinas
         CoroutineScope(Dispatchers.IO).launch {
             iniciarMotorEscaner()
         }
@@ -87,50 +122,48 @@ class TradingScannerService : Service() {
     private fun cargarConfiguracion(): UserConfig {
         val prefs = getSharedPreferences("AppScannerConfig", Context.MODE_PRIVATE)
         val jsonGuardado = prefs.getString("config_data", null)
-        return if (jsonGuardado != null) {
-            gson.fromJson(jsonGuardado, UserConfig::class.java)
-        } else {
-            UserConfig()
-        }
+        return if (jsonGuardado != null) gson.fromJson(jsonGuardado, UserConfig::class.java) else UserConfig()
     }
 
-    // Función auxiliar para enviar textos a la consola de la app
-    private fun emitirLogApp(mensaje: String) {
+    private fun emitirLogApp(mensaje: String, ignorarLimiteDeTiempo: Boolean = false) {
         if (isDebugMode) {
-            AlertManager.agregarLog(mensaje)
+            val now = System.currentTimeMillis()
+            // Evitamos enviar miles de logs a Compose por segundo, permitiendo máximo 3 por segundo
+            if (ignorarLimiteDeTiempo || (now - lastLogTime > 300)) {
+                Log.d("ScannerDebug", mensaje)
+                AlertManager.agregarLog(mensaje)
+                lastLogTime = now
+            }
         }
     }
 
     private suspend fun iniciarMotorEscaner() = coroutineScope {
-        emitirLogApp("🚀 Iniciando motor Multiusuario...")
-        Log.d("Scanner", "Iniciando motor Multiusuario...")
+        emitirLogApp("🚀 Filtrando contratos Perpetuos USDT...", true)
 
         val topSymbols = obtenerTopPares()
         val duration = parseTimeframe(config.timeframe)
 
-        emitirLogApp("📡 Descargando historial para ${topSymbols.size} monedas...")
-        Log.d("Scanner", "Descargando historial usando Corrutinas...")
+        emitirLogApp("⏳ Descargando historial en paralelo (10 Hilos)...", true)
 
-        // Descarga Multihilo Paralela: Máxima velocidad
-        val descargas = topSymbols.map { symbol ->
-            async(Dispatchers.IO) {
-                val series = BaseBarSeriesBuilder().withName(symbol).build()
-                series.maximumBarCount = 300
-                descargarHistorial(symbol, config.timeframe, series, duration)
+        // Inicializamos los contenedores
+        topSymbols.forEach { marketData[it] = TokenData(it) }
 
-                // Prevenir choques de memoria entre los diferentes hilos
-                synchronized(marketData) {
-                    marketData[symbol] = series
-                }
+        // Pool fijo de hilos para no sobrecargar el procesador en la descarga
+        val executor = java.util.concurrent.Executors.newFixedThreadPool(10)
+
+        topSymbols.forEach { symbol ->
+            executor.submit {
+                descargarHistorial(symbol, config.timeframe, duration)
             }
         }
 
-        // Esperamos a que terminen las 50 descargas
-        descargas.awaitAll()
+        executor.shutdown()
+        executor.awaitTermination(1, TimeUnit.MINUTES)
 
-        emitirLogApp("✅ ¡Historial descargado! Conectando a WebSockets de Binance...")
-        Log.d("Scanner", "¡Historial descargado con éxito! Conectando a WebSockets...")
+        emitirLogApp("✅ Websockets Conectados. Analizando mercado...", true)
         conectarWebSocket(topSymbols, duration)
+
+        launch { actualizarSpreads(topSymbols) }
     }
 
     private fun obtenerTopPares(): List<String> {
@@ -140,52 +173,69 @@ class TradingScannerService : Service() {
                 val body = response.body?.string() ?: return emptyList()
                 val tickers = JsonParser.parseString(body).asJsonArray
                 tickers.map { it.asJsonObject }
-                    .filter { it.get("symbol").asString.endsWith("USDT") }
-                    .sortedByDescending { it.get("quoteVolume").asDouble }
-                    .take(50) // Analizamos el TOP 50 con más volumen
+                    .filter { it.get("symbol").asString.endsWith("USDT") && it.get("quoteVolume").asDouble > 15000000.0 }
+                    .sortedByDescending { Math.abs(it.get("priceChangePercent").asDouble) }
+                    .take(50)
                     .map { it.get("symbol").asString }
             }
         } catch (e: Exception) {
-            emitirLogApp("❌ Error obteniendo top pares: ${e.message}")
-            Log.e("Scanner", "Error obteniendo top pares: ${e.message}")
-            listOf("BTCUSDT", "ETHUSDT", "SOLUSDT") // Respaldo en caso de error
+            verificarBaneo(e)
+            listOf("BTCUSDT", "ETHUSDT", "SOLUSDT")
         }
     }
 
-    private fun descargarHistorial(symbol: String, timeframe: String, series: BaseBarSeries, duration: Duration) {
+    private suspend fun actualizarSpreads(symbols: List<String>) {
+        while (isRunning) {
+            try {
+                val request = Request.Builder().url("https://fapi.binance.com/fapi/v1/ticker/bookTicker").build()
+                client.newCall(request).execute().use { response ->
+                    val body = response.body?.string() ?: return@use
+                    val tickers = JsonParser.parseString(body).asJsonArray
+                    for (t in tickers) {
+                        val obj = t.asJsonObject
+                        val symbol = obj.get("symbol").asString
+                        if (symbols.contains(symbol)) {
+                            val bid = obj.get("bidPrice").asDouble
+                            val ask = obj.get("askPrice").asDouble
+                            if (bid > 0) spreadCache[symbol] = ((ask - bid) / bid) * 100
+                        }
+                    }
+                }
+            } catch (e: Exception) { }
+            delay(5000) // Se actualiza cada 5 seg
+        }
+    }
+
+    private fun descargarHistorial(symbol: String, timeframe: String, duration: Duration) {
+        val tokenData = marketData[symbol] ?: return
         val url = "https://fapi.binance.com/fapi/v1/klines?symbol=$symbol&interval=$timeframe&limit=250"
         val request = Request.Builder().url(url).build()
         try {
             client.newCall(request).execute().use { response ->
-                if (!response.isSuccessful) {
-                    Log.e("Scanner", "Error HTTP ${response.code} para $symbol")
-                    return
-                }
+                if (!response.isSuccessful) { verificarBaneo(Exception(response.code.toString())); return }
                 val body = response.body?.string() ?: return
                 val klines = JsonParser.parseString(body).asJsonArray
+
                 for (k in klines) {
                     val kline = k.asJsonArray
                     val endTime = ZonedDateTime.ofInstant(Instant.ofEpochMilli(kline.get(6).asLong), ZoneId.of("UTC"))
-
-                    // Precisión extrema exigida por TA4J (DecimalNum)
                     val bar = BaseBar(
-                        duration,
-                        endTime,
-                        DecimalNum.valueOf(kline.get(1).asString),
-                        DecimalNum.valueOf(kline.get(2).asString),
-                        DecimalNum.valueOf(kline.get(3).asString),
-                        DecimalNum.valueOf(kline.get(4).asString),
-                        DecimalNum.valueOf(kline.get(5).asString),
-                        DecimalNum.valueOf("0.0")
+                        duration, endTime,
+                        DecimalNum.valueOf(kline.get(1).asString), DecimalNum.valueOf(kline.get(2).asString),
+                        DecimalNum.valueOf(kline.get(3).asString), DecimalNum.valueOf(kline.get(4).asString),
+                        DecimalNum.valueOf(kline.get(5).asString), DecimalNum.valueOf("0.0")
                     )
-                    series.addBar(bar)
+                    tokenData.series.addBar(bar)
                 }
-                // Aviso visual a la consola CMD de la app
-                emitirLogApp("[OK] Descargadas 250 velas de $symbol")
+
+                // Calentamiento Forzado
+                if (tokenData.series.barCount >= 200) {
+                    evaluateStrategy(symbol, tokenData, esEvaluacionInicial = true)
+                }
+
+                emitirLogApp("[OK] Descargadas 250 velas de $symbol", true)
             }
-        } catch (e: Exception) {
-            Log.e("Scanner", "Error descargando historial para $symbol: ${e.message}")
-        }
+        } catch (e: Exception) { verificarBaneo(e) }
     }
 
     private fun conectarWebSocket(symbols: List<String>, duration: Duration) {
@@ -196,8 +246,7 @@ class TradingScannerService : Service() {
         val request = Request.Builder().url(wsUrl).build()
         webSocket = client.newWebSocket(request, object : WebSocketListener() {
             override fun onMessage(webSocket: WebSocket, text: String) {
-                if (!isRunning) return // Si el motor se apagó, ignoramos los mensajes entrantes
-
+                if (!isRunning) return
                 try {
                     val json = JsonParser.parseString(text).asJsonObject
                     if (!json.has("data")) return
@@ -214,16 +263,13 @@ class TradingScannerService : Service() {
                     val closeTime = kline.get("T").asLong
 
                     actualizarVela(symbol, openPrice, highPrice, lowPrice, closePrice, volume, closeTime, isKLineClosed, duration)
-                } catch (e: Exception) {
-                    Log.e("Scanner", "Error parseando WS: ${e.message}")
-                }
+                } catch (e: Exception) { }
             }
 
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
                 if (isRunning) {
-                    emitirLogApp("⚠️ Desconexión de Binance. Reconectando en 10s...")
-                    Log.e("Scanner", "Error WebSocket: ${t.message}. Reconectando en 10s...")
-                    Thread.sleep(10000)
+                    emitirLogApp("⚠️ Reconectando WS en 5s...", true)
+                    Thread.sleep(5000)
                     conectarWebSocket(symbols, duration)
                 }
             }
@@ -234,137 +280,230 @@ class TradingScannerService : Service() {
         symbol: String, open: Double, high: Double, low: Double, close: Double,
         volume: Double, closeTime: Long, isClosed: Boolean, duration: Duration
     ) {
-        val series = marketData[symbol] ?: return
+        val tokenData = marketData[symbol] ?: return
         val endZoned = ZonedDateTime.ofInstant(Instant.ofEpochMilli(closeTime), ZoneId.of("UTC"))
 
-        // Precisión extrema con DecimalNum
         val bar = BaseBar(
-            duration,
-            endZoned,
-            DecimalNum.valueOf(open.toString()),
-            DecimalNum.valueOf(high.toString()),
-            DecimalNum.valueOf(low.toString()),
-            DecimalNum.valueOf(close.toString()),
-            DecimalNum.valueOf(volume.toString()),
-            DecimalNum.valueOf("0.0")
+            duration, endZoned,
+            DecimalNum.valueOf(open.toString()), DecimalNum.valueOf(high.toString()),
+            DecimalNum.valueOf(low.toString()), DecimalNum.valueOf(close.toString()),
+            DecimalNum.valueOf(volume.toString()), DecimalNum.valueOf("0.0")
         )
 
         try {
-            if (series.barCount > 0 && series.lastBar.endTime.isEqual(endZoned)) {
-                series.addBar(bar, true) // Actualiza la vela viva
+            if (tokenData.series.barCount > 0 && tokenData.series.lastBar.endTime.isEqual(endZoned)) {
+                tokenData.series.addBar(bar, true) // Reemplaza la última
+                // Solo evaluamos si estamos cerca del cierre para ahorrar CPU
+                // evaluateStrategy(symbol, tokenData) // Opcional: Descomentar si quieres ticks intradiarios
             } else if (isClosed) {
-                series.addBar(bar) // Agrega la vela ya cerrada
-                evaluateStrategy(symbol, series) // Evaluar la estrategia en el momento del cierre de vela
+                tokenData.series.addBar(bar)
+                evaluateStrategy(symbol, tokenData)
             }
-        } catch (e: Exception) {
-            Log.e("Scanner", "Error actualizando serie $symbol: ${e.message}")
-        }
+        } catch (e: Exception) { }
     }
 
-    private fun evaluateStrategy(symbol: String, series: BaseBarSeries) {
-        if (series.barCount < 200) return
+    // =========================================================================
+    // CORAZÓN MATEMÁTICO EXTREMADAMENTE OPTIMIZADO
+    // =========================================================================
+    private fun evaluateStrategy(symbol: String, tData: TokenData, esEvaluacionInicial: Boolean = false) {
+        if (tData.series.barCount < 200) return
 
-        // --- 1. CÁLCULO DE INDICADORES ---
-        val closePriceInd = ClosePriceIndicator(series)
-        val rsi = RSIIndicator(closePriceInd, 14)
-        val ema7 = EMAIndicator(closePriceInd, 7)
-        val ema200 = EMAIndicator(closePriceInd, 200)
-        val adx = ADXIndicator(series, 14)
-        val atr = ATRIndicator(series, 14)
-
-        val lastIdx = series.endIndex
+        val lastIdx = tData.series.endIndex
         val prevIdx = lastIdx - 1
 
-        val closeActual = closePriceInd.getValue(lastIdx).doubleValue()
-        val closePrevio = closePriceInd.getValue(prevIdx).doubleValue()
-        val ema7Actual = ema7.getValue(lastIdx).doubleValue()
-        val ema7Previo = ema7.getValue(prevIdx).doubleValue()
-        val ema200Actual = ema200.getValue(lastIdx).doubleValue()
-        val rsiActual = rsi.getValue(lastIdx).doubleValue()
-        val adxActual = adx.getValue(lastIdx).doubleValue()
-        val atrActual = atr.getValue(lastIdx).doubleValue()
+        // 1. Extraemos los valores EXIGIENDO el cálculo de la librería
+        // Al estar los indicadores creados una sola vez en TokenData,
+        // TA4J usa la caché interna y devuelve el valor en milisegundos.
+        val closeActual = tData.closePrice.getValue(lastIdx).doubleValue()
+        val closePrevio = tData.closePrice.getValue(prevIdx).doubleValue()
 
-        val atrPct = (atrActual / closeActual) * 100
+        val ema7Actual = tData.ema7.getValue(lastIdx).doubleValue()
+        val ema7Previo = tData.ema7.getValue(prevIdx).doubleValue()
+        val ema200Actual = tData.ema200.getValue(lastIdx).doubleValue()
 
-        // =====================================================
-        // PANEL MODO DEBUG (TEXTO PARA LA CONSOLA DE LA APP)
-        // =====================================================
+        val rsiRaw = tData.rsi.getValue(lastIdx).doubleValue()
+        val rsiActual = if (rsiRaw.isNaN()) 0.0 else rsiRaw
+
+        val atrRaw = tData.atr.getValue(lastIdx).doubleValue()
+        val atrActual = if (atrRaw.isNaN()) 0.0 else atrRaw
+
+        val adxRaw = tData.adx.getValue(lastIdx).doubleValue()
+        val adxActual = if (adxRaw.isNaN()) 0.0 else adxRaw
+
+        val volActual = tData.volumeInd.getValue(lastIdx).doubleValue()
+        val volSmaActual = tData.volSma.getValue(lastIdx).doubleValue()
+
+        val bbUpperActual = tData.bbUpper.getValue(lastIdx).doubleValue()
+        val bbLowerActual = tData.bbLower.getValue(lastIdx).doubleValue()
+
+        val macdHistAct = tData.macdLine.getValue(lastIdx).doubleValue() - tData.macdSignal.getValue(lastIdx).doubleValue()
+        val macdHistPrev = tData.macdLine.getValue(prevIdx).doubleValue() - tData.macdSignal.getValue(prevIdx).doubleValue()
+
+        if (esEvaluacionInicial) return
+
+        val atrPct = if (closeActual > 0) (atrActual / closeActual) * 100 else 0.0
+        val spread = spreadCache[symbol] ?: 0.0
+        val volRatio = if (volSmaActual > 0) volActual / volSmaActual else 0.0
+
         val hora = java.text.SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(java.util.Date())
-        val logMensaje = """
-            [$hora] --- ANALIZANDO: $symbol ---
-            Precio: ${String.format(Locale.US, "%.5f", closeActual)} USDT | ATR: ${String.format(Locale.US, "%.3f", atrPct)}% (Req: >=${config.minVolatilidadPct}%)
-            EMA7: ${String.format(Locale.US, "%.5f", ema7Actual)} | EMA200: ${String.format(Locale.US, "%.5f", ema200Actual)}
+        val logHeader = """
+            
+            --- ANALIZANDO: $symbol ---
+            Precio: ${String.format(Locale.US, "%.5f", closeActual)} | ATR: ${String.format(Locale.US, "%.2f", atrPct)}%
             RSI: ${String.format(Locale.US, "%.1f", rsiActual)} | ADX: ${String.format(Locale.US, "%.1f", adxActual)}
+            VolRatio: ${String.format(Locale.US, "%.2f", volRatio)}x | Spread: ${String.format(Locale.US, "%.2f", spread)}%
         """.trimIndent()
-        // =====================================================
 
-        // --- 2. FILTROS DE RECHAZO ---
+        // --- FILTROS DE RECHAZO ---
+        if (spread > config.maxSpreadPct) {
+            emitirLogApp("$logHeader\n❌ RECHAZADO: SPREAD ALTO")
+            return
+        }
         if (atrPct < config.minVolatilidadPct) {
-            emitirLogApp("$logMensaje\n❌ RECHAZADO: Mercado sin volatilidad\n----------------------------")
+            emitirLogApp("$logHeader\n❌ RECHAZADO: MERCADO PLANO")
+            return
+        }
+        if (volRatio < config.minRatioVol) {
+            emitirLogApp("$logHeader\n❌ RECHAZADO: VOLUMEN BAJO")
             return
         }
 
-        // --- 3. GATILLO FRANCOTIRADOR ---
+        // --- GATILLO FRANCOTIRADOR ---
         val tendenciaAlcista = closeActual > ema200Actual
         val tendenciaBajista = closeActual < ema200Actual
+
         val gatilloLong = (closePrevio <= ema7Previo) && (closeActual > ema7Actual)
         val gatilloShort = (closePrevio >= ema7Previo) && (closeActual < ema7Actual)
 
+        val adxValido = adxActual >= 18.0
+        val macdGirandoAlcista = macdHistAct > macdHistPrev
+        val macdGirandoBajista = macdHistAct < macdHistPrev
+
         var senal = "NEUTRAL"
-        if (tendenciaAlcista && gatilloLong && adxActual >= 18.0 && rsiActual < 65.0) {
+        if (tendenciaAlcista && gatilloLong && adxValido && rsiActual < 65.0 && macdGirandoAlcista) {
             senal = "LONG"
-        } else if (tendenciaBajista && gatilloShort && adxActual >= 18.0 && rsiActual > 35.0) {
+        } else if (tendenciaBajista && gatilloShort && adxValido && rsiActual > 35.0 && macdGirandoBajista) {
             senal = "SHORT"
         }
 
-        if (senal != "NEUTRAL") {
-            emitirLogApp("$logMensaje\n✅ ¡OPORTUNIDAD DETECTADA!: $senal\n----------------------------")
-            notificarAlerta(symbol, senal, closeActual, atrActual)
-        } else {
-            emitirLogApp("$logMensaje\n⏸️ RECHAZADO: Sin cruce o indicadores no alineados\n----------------------------")
+        if (senal == "NEUTRAL") {
+            emitirLogApp("$logHeader\n⏸️ RECHAZADO: Sin cruce o indicadores no alineados")
+            return
+        }
+
+        // --- SISTEMA DE COOLDOWN ---
+        val ultimoRegistro = registroBloqueo[symbol]
+        if (ultimoRegistro != null) {
+            val tiempoPasado = (System.currentTimeMillis() - ultimoRegistro) / 1000
+            if (tiempoPasado < config.cooldownAlertaSegundos) {
+                emitirLogApp("$logHeader\n⏳ IGNORADO: Oportunidad en cooldown")
+                return
+            }
+        }
+
+        // =====================================================================
+        // ORDEN BOOK Y TRADES (Llamadas asíncronas seguras)
+        // =====================================================================
+        CoroutineScope(Dispatchers.IO).launch {
+            try {
+                val obUrl = "https://fapi.binance.com/fapi/v1/depth?symbol=$symbol&limit=5"
+                val obResp = client.newCall(Request.Builder().url(obUrl).build()).execute().body?.string()
+                val obJson = JsonParser.parseString(obResp).asJsonObject
+
+                var bidQty = 0.0; var askQty = 0.0
+                obJson.getAsJsonArray("bids").forEach { bidQty += it.asJsonArray[1].asDouble }
+                obJson.getAsJsonArray("asks").forEach { askQty += it.asJsonArray[1].asDouble }
+
+                val trUrl = "https://fapi.binance.com/fapi/v1/trades?symbol=$symbol&limit=500"
+                val trResp = client.newCall(Request.Builder().url(trUrl).build()).execute().body?.string()
+                val trJson = JsonParser.parseString(trResp).asJsonArray
+
+                var volTotal = 0.0; var volCompras = 0.0
+                trJson.forEach {
+                    val qty = it.asJsonObject.get("qty").asDouble
+                    val isBuyerMaker = it.asJsonObject.get("isBuyerMaker").asBoolean
+                    volTotal += qty
+                    if (!isBuyerMaker) volCompras += qty
+                }
+                val pctCompras = if (volTotal > 0) (volCompras / volTotal) * 100 else 50.0
+
+                if (senal == "LONG" && askQty > (bidQty * 3.5)) {
+                    emitirLogApp("$logHeader\n❌ RECHAZADO: MURO DE VENTA PELIGROSO")
+                    return@launch
+                } else if (senal == "SHORT" && bidQty > (askQty * 3.5)) {
+                    emitirLogApp("$logHeader\n❌ RECHAZADO: MURO DE COMPRA PELIGROSO")
+                    return@launch
+                }
+
+                if ((senal == "LONG" && pctCompras < 40.0) || (senal == "SHORT" && pctCompras > 60.0)) {
+                    emitirLogApp("$logHeader\n❌ RECHAZADO: FUERZA INSUFICIENTE EN TRADES")
+                    return@launch
+                }
+
+                var margenOp = billeteraVirtualUsdt * (config.porcentajeInversion / 100.0)
+                var distSl = atrActual * config.multiplicadorSl
+
+                val topeMax = closeActual * 0.008
+                val topeMin = closeActual * 0.003
+                if (distSl > topeMax) distSl = topeMax
+                if (distSl < topeMin) distSl = topeMin
+
+                var valPosNominal = margenOp * config.apalancamiento
+                val cantMonedas = if (closeActual > 0) valPosNominal / closeActual else 0.0
+
+                val perdidaPotencial = distSl * cantMonedas
+                val riesgoMaximo = billeteraVirtualUsdt * 0.04
+
+                if (perdidaPotencial > riesgoMaximo && distSl > 0) {
+                    margenOp = (riesgoMaximo / distSl) * (closeActual / config.apalancamiento)
+                }
+
+                val distTp = distSl * config.multiplicadorTp
+                val tp = if (senal == "LONG") closeActual + distTp else closeActual - distTp
+                val sl = if (senal == "LONG") closeActual - distSl else closeActual + distSl
+
+                registroBloqueo[symbol] = System.currentTimeMillis()
+
+                emitirLogApp("$logHeader\n✅ ¡OPORTUNIDAD ENVIADA A LA INTERFAZ!", true)
+
+                val nuevaAlerta = AlertData(
+                    symbol = symbol,
+                    senal = senal,
+                    precio = closeActual,
+                    tp = tp,
+                    sl = sl,
+                    velasEst = Math.max(1, (distTp / atrActual).toInt()),
+                    timeframe = config.timeframe
+                )
+                AlertManager.agregarAlerta(nuevaAlerta)
+
+                val intent = Intent(this@TradingScannerService, MainActivity::class.java)
+                val pendingIntent = PendingIntent.getActivity(this@TradingScannerService, 0, intent, PendingIntent.FLAG_IMMUTABLE)
+
+                val notification = NotificationCompat.Builder(this@TradingScannerService, CHANNEL_ID)
+                    .setContentTitle("🎯 Señal: $symbol $senal")
+                    .setContentText("Entrada: $closeActual | TP: ${String.format(Locale.US, "%.4f", tp)} | SL: ${String.format(Locale.US, "%.4f", sl)}")
+                    .setSmallIcon(android.R.drawable.ic_dialog_alert)
+                    .setPriority(NotificationCompat.PRIORITY_HIGH)
+                    .setContentIntent(pendingIntent)
+                    .setAutoCancel(true)
+                    .build()
+
+                val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+                manager.notify(symbol.hashCode(), notification)
+
+            } catch (e: Exception) {
+                emitirLogApp("$logHeader\n❌ Error API en validación: ${e.message}")
+            }
         }
     }
 
-    private fun notificarAlerta(symbol: String, senal: String, precio: Double, atrValue: Double) {
-        var distSl = atrValue * config.multiplicadorSl
-
-        // Topes de seguridad exactos
-        val topeMax = precio * 0.008
-        val topeMin = precio * 0.003
-        if (distSl > topeMax) distSl = topeMax
-        if (distSl < topeMin) distSl = topeMin
-
-        val distTp = distSl * config.multiplicadorTp
-        val tp = if (senal == "LONG") precio + distTp else precio - distTp
-        val sl = if (senal == "LONG") precio - distSl else precio + distSl
-
-        // 1. Enviar Alerta al Monitor Gráfico (Jetpack Compose - AlertManager)
-        val nuevaAlerta = AlertData(
-            symbol = symbol,
-            senal = senal,
-            precio = precio,
-            tp = tp,
-            sl = sl,
-            velasEst = 2,
-            timeframe = config.timeframe
-        )
-        AlertManager.agregarAlerta(nuevaAlerta)
-
-        // 2. Enviar Notificación Push Local del sistema Android
-        val intent = Intent(this, MainActivity::class.java)
-        val pendingIntent = PendingIntent.getActivity(this, 0, intent, PendingIntent.FLAG_IMMUTABLE)
-
-        val notification = NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("🎯 Señal: $symbol $senal")
-            .setContentText("Entrada: $precio | TP: ${String.format(Locale.US, "%.4f", tp)} | SL: ${String.format(Locale.US, "%.4f", sl)}")
-            .setSmallIcon(android.R.drawable.ic_dialog_alert)
-            .setPriority(NotificationCompat.PRIORITY_HIGH)
-            .setContentIntent(pendingIntent)
-            .setAutoCancel(true)
-            .build()
-
-        val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        manager.notify(symbol.hashCode(), notification)
+    private fun verificarBaneo(e: Exception) {
+        val msg = e.message?.lowercase() ?: ""
+        if (msg.contains("429") || msg.contains("418") || msg.contains("banned")) {
+            emitirLogApp("⚠️ BANEO DE IP DETECTADO. Hibernando 5 min...", true)
+            Thread.sleep(305000)
+        }
     }
 
     private fun parseTimeframe(tf: String): Duration {
@@ -380,11 +519,7 @@ class TradingScannerService : Service() {
 
     private fun crearCanalNotificacion() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val channel = NotificationChannel(
-                CHANNEL_ID,
-                "Motor Scanner Trading",
-                NotificationManager.IMPORTANCE_LOW
-            )
+            val channel = NotificationChannel(CHANNEL_ID, "Motor Scanner Trading", NotificationManager.IMPORTANCE_LOW)
             val manager = getSystemService(NotificationManager::class.java)
             manager.createNotificationChannel(channel)
         }
@@ -392,9 +527,9 @@ class TradingScannerService : Service() {
 
     override fun onDestroy() {
         super.onDestroy()
-        isRunning = false // Le avisa al sistema que el switch de apagado fue presionado
-        webSocket?.close(1000, "Servicio detenido por el usuario")
-        emitirLogApp("🛑 Motor de escaneo detenido.")
+        isRunning = false
+        webSocket?.close(1000, "Servicio detenido")
+        emitirLogApp("🛑 Motor detenido.", true)
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
