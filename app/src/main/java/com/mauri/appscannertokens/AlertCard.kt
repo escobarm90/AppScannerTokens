@@ -43,19 +43,10 @@ fun AlertCard(
     val formatter = SimpleDateFormat("HH:mm:ss", Locale.getDefault())
     val horaStr = formatter.format(Date(alerta.timestamp))
 
-    // ========================================================
-    // MATEMÁTICA EXACTA DEL PNL Y TAMAÑO DE POSICIÓN
-    // ========================================================
     val margenCalculado = if (billetera > 0) billetera * (porcentajeUsado / 100.0) else 0.0
     val nominalCalculado = margenCalculado * config.apalancamiento
-
-    // Distancia en porcentaje desde la entrada hasta el Take Profit
     val distanciaTpPct = if (alerta.precio > 0) Math.abs(alerta.tp - alerta.precio) / alerta.precio else 0.0
-
-    // Ganancia = Tamaño de posición * % de movimiento del precio
     val pnlCalculado = nominalCalculado * distanciaTpPct
-
-    // ROE (Return on Equity) = Ganancia / Margen Invertido
     val roeCalculado = distanciaTpPct * config.apalancamiento * 100.0
 
     Card(
@@ -106,7 +97,7 @@ fun AlertCard(
                 colors = SliderDefaults.colors(thumbColor = if (isCruzado) colorCyan else colorYellow, activeTrackColor = if (isCruzado) colorCyan else colorYellow)
             )
 
-            // --- BOTONES DE COMPRA/VENTA ---
+            // --- BOTONES COMPRA/VENTA (CON INICIO DE TRAILING) ---
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 val side = if (alerta.senal == "LONG") "BUY" else "SELL"
                 val cantidadMonedas = if (alerta.precio > 0) nominalCalculado / alerta.precio else 0.0
@@ -114,14 +105,12 @@ fun AlertCard(
                 Button(
                     onClick = {
                         if (config.apiKey.isEmpty() || config.apiSecret.isEmpty()) {
-                            Toast.makeText(context, "Configura tus API Keys primero", Toast.LENGTH_SHORT).show()
+                            Toast.makeText(context, "Faltan API Keys", Toast.LENGTH_SHORT).show()
                             return@Button
                         }
                         isEjecutando = true
                         coroutineScope.launch {
-                            val (exito, msj) = BinanceApiManager.ejecutarOrden(
-                                config.apiKey, config.apiSecret, alerta.symbol, side, "LIMIT", cantidadMonedas, alerta.precio, tipoMargen
-                            )
+                            val (exito, msj) = BinanceApiManager.ejecutarOrden(config.apiKey, config.apiSecret, alerta.symbol, side, "LIMIT", cantidadMonedas, alerta.precio, tipoMargen)
                             Toast.makeText(context, msj, Toast.LENGTH_LONG).show()
                             isEjecutando = false
                         }
@@ -135,15 +124,27 @@ fun AlertCard(
                 Button(
                     onClick = {
                         if (config.apiKey.isEmpty() || config.apiSecret.isEmpty()) {
-                            Toast.makeText(context, "Configura tus API Keys primero", Toast.LENGTH_SHORT).show()
+                            Toast.makeText(context, "Faltan API Keys", Toast.LENGTH_SHORT).show()
                             return@Button
                         }
                         isEjecutando = true
                         coroutineScope.launch {
-                            val (exito, msj) = BinanceApiManager.ejecutarOrden(
-                                config.apiKey, config.apiSecret, alerta.symbol, side, "MARKET", cantidadMonedas, alerta.precio, tipoMargen
-                            )
+                            // 1. Enviar orden a mercado
+                            val (exito, msj) = BinanceApiManager.ejecutarOrden(config.apiKey, config.apiSecret, alerta.symbol, side, "MARKET", cantidadMonedas, alerta.precio, tipoMargen)
                             Toast.makeText(context, msj, Toast.LENGTH_LONG).show()
+
+                            if (exito) {
+                                // 2. Iniciar escáner de Trailing en Segundo Plano
+                                PositionManager.iniciarMonitoreo(config, alerta.symbol, alerta.senal, alerta.precio, alerta.tp, config.apalancamiento)
+
+                                // 3. Colocar escudos físicos (TP y SL)
+                                val ladoSalida = if (alerta.senal == "LONG") "SELL" else "BUY"
+                                BinanceApiManager.crearOrdenStop(config.apiKey, config.apiSecret, alerta.symbol, ladoSalida, "TAKE_PROFIT_MARKET", alerta.tp)
+                                BinanceApiManager.crearOrdenStop(config.apiKey, config.apiSecret, alerta.symbol, ladoSalida, "STOP_MARKET", alerta.sl)
+
+                                AlertManager.agregarLog("🛡️ Escudos físicos colocados para ${alerta.symbol}.")
+                                onDismiss() // Descartar tarjeta tras apertura exitosa
+                            }
                             isEjecutando = false
                         }
                     },
@@ -154,7 +155,6 @@ fun AlertCard(
                 }
             }
 
-            // BOTÓN DESCARTAR
             Button(
                 onClick = onDismiss, modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
                 colors = ButtonDefaults.buttonColors(containerColor = Color.Transparent), border = androidx.compose.foundation.BorderStroke(1.dp, colorBorde)
@@ -164,11 +164,9 @@ fun AlertCard(
 
             HorizontalDivider(modifier = Modifier.padding(vertical = 12.dp), color = colorBorde)
 
-            // --- RESULTADOS ESTIMADOS (CON PNL REAL) ---
+            // --- RESULTADOS ESTIMADOS ---
             Text("🏦 RESULTADOS ESTIMADOS", color = colorYellow, fontSize = 12.sp, fontWeight = FontWeight.Bold)
             DataRow("Margen a Usar ($tipoMargen)", String.format(Locale.US, "$%.2f USDT", margenCalculado), Color.White)
-
-            // Fila de Ganancia + ROE %
             Row(modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp), horizontalArrangement = Arrangement.SpaceBetween) {
                 Text("PNL Neto Est. (Si toca TP)", color = Color.Gray, fontSize = 14.sp)
                 Text(

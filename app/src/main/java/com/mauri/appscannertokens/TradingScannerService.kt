@@ -25,10 +25,6 @@ import org.ta4j.core.indicators.helpers.VolumeIndicator
 import org.ta4j.core.indicators.ATRIndicator
 import org.ta4j.core.indicators.MACDIndicator
 import org.ta4j.core.indicators.SMAIndicator
-import org.ta4j.core.indicators.statistics.StandardDeviationIndicator
-import org.ta4j.core.indicators.bollinger.BollingerBandsLowerIndicator
-import org.ta4j.core.indicators.bollinger.BollingerBandsUpperIndicator
-import org.ta4j.core.indicators.bollinger.BollingerBandsMiddleIndicator
 import org.ta4j.core.num.DecimalNum
 import java.time.Duration
 import java.time.Instant
@@ -46,8 +42,6 @@ class TokenData(symbol: String) {
         maximumBarCount = 300
     }
 
-    // Al instanciar los indicadores una sola vez, TA4J usa su caché interno
-    // y evita recalcular toda la historia cada vez que llega un tick.
     val closePrice = ClosePriceIndicator(series)
     val volumeInd = VolumeIndicator(series)
 
@@ -57,12 +51,6 @@ class TokenData(symbol: String) {
     val ema200 = EMAIndicator(closePrice, 200)
     val volSma = SMAIndicator(volumeInd, 20)
     val adx = ADXIndicator(series, 14)
-
-    val stdDev = StandardDeviationIndicator(closePrice, 20)
-    val sma20 = SMAIndicator(closePrice, 20)
-    val bbMiddle = BollingerBandsMiddleIndicator(sma20)
-    val bbUpper = BollingerBandsUpperIndicator(bbMiddle, stdDev, DecimalNum.valueOf("2.0"))
-    val bbLower = BollingerBandsLowerIndicator(bbMiddle, stdDev, DecimalNum.valueOf("2.0"))
 
     val macdLine = MACDIndicator(closePrice, 12, 26)
     val macdSignal = EMAIndicator(macdLine, 9)
@@ -79,14 +67,13 @@ class TradingScannerService : Service() {
     private lateinit var config: UserConfig
     private var webSocket: WebSocket? = null
 
-    // Usamos ConcurrentHashMap por seguridad en Multihilo
     private val marketData = ConcurrentHashMap<String, TokenData>()
     private val spreadCache = ConcurrentHashMap<String, Double>()
     private val registroBloqueo = ConcurrentHashMap<String, Long>()
 
     private var billeteraVirtualUsdt = 20.0
 
-    // Control de velocidad del Logcat para no saturar la pantalla de Compose
+    // Control de velocidad del Logcat
     private var lastLogTime = System.currentTimeMillis()
 
     companion object {
@@ -128,8 +115,8 @@ class TradingScannerService : Service() {
     private fun emitirLogApp(mensaje: String, ignorarLimiteDeTiempo: Boolean = false) {
         if (isDebugMode) {
             val now = System.currentTimeMillis()
-            // Evitamos enviar miles de logs a Compose por segundo, permitiendo máximo 3 por segundo
-            if (ignorarLimiteDeTiempo || (now - lastLogTime > 300)) {
+            // Filtro a 50ms para que la terminal fluya en cascada sin crashear la UI
+            if (ignorarLimiteDeTiempo || (now - lastLogTime > 50)) {
                 Log.d("ScannerDebug", mensaje)
                 AlertManager.agregarLog(mensaje)
                 lastLogTime = now
@@ -145,10 +132,8 @@ class TradingScannerService : Service() {
 
         emitirLogApp("⏳ Descargando historial en paralelo (10 Hilos)...", true)
 
-        // Inicializamos los contenedores
         topSymbols.forEach { marketData[it] = TokenData(it) }
 
-        // Pool fijo de hilos para no sobrecargar el procesador en la descarga
         val executor = java.util.concurrent.Executors.newFixedThreadPool(10)
 
         topSymbols.forEach { symbol ->
@@ -160,7 +145,7 @@ class TradingScannerService : Service() {
         executor.shutdown()
         executor.awaitTermination(1, TimeUnit.MINUTES)
 
-        emitirLogApp("✅ Websockets Conectados. Analizando mercado...", true)
+        emitirLogApp("✅ Websockets Conectados. Analizando mercado en tiempo real...", true)
         conectarWebSocket(topSymbols, duration)
 
         launch { actualizarSpreads(topSymbols) }
@@ -172,15 +157,35 @@ class TradingScannerService : Service() {
             client.newCall(request).execute().use { response ->
                 val body = response.body?.string() ?: return emptyList()
                 val tickers = JsonParser.parseString(body).asJsonArray
-                tickers.map { it.asJsonObject }
-                    .filter { it.get("symbol").asString.endsWith("USDT") && it.get("quoteVolume").asDouble > 15000000.0 }
+
+                val paresFiltrados = tickers.map { it.asJsonObject }
+                    // 1. Filtrar solo pares USDT (sin barrera de volumen y omitiendo stables)
+                    .filter {
+                        val symbol = it.get("symbol").asString
+                        symbol.endsWith("USDT") && symbol != "USDCUSDT" && symbol != "BUSDUSDT"
+                    }
+                    // 2. Ordenar por máxima volatilidad absoluta
                     .sortedByDescending { Math.abs(it.get("priceChangePercent").asDouble) }
-                    .take(50)
+                    // 3. Clavar el límite estricto en los 40 más explosivos
+                    .take(40)
                     .map { it.get("symbol").asString }
+
+                emitirLogApp("📊 ÉXITO: Se cargaron ${paresFiltrados.size} pares hiper-volátiles.", true)
+                paresFiltrados
             }
         } catch (e: Exception) {
             verificarBaneo(e)
-            listOf("BTCUSDT", "ETHUSDT", "SOLUSDT")
+            val error = e.message ?: "Error de red"
+            emitirLogApp("⚠️ Falló la API inicial ($error). Cargando 40 tokens de respaldo...", true)
+
+            // Lista de emergencia si falla tu internet justo al arrancar
+            listOf(
+                "BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "DOGEUSDT", "XRPUSDT", "ADAUSDT", "AVAXUSDT",
+                "LINKUSDT", "DOTUSDT", "MATICUSDT", "LTCUSDT", "BCHUSDT", "APTUSDT", "ARBUSDT", "OPUSDT",
+                "INJUSDT", "RNDRUSDT", "SUIUSDT", "SEIUSDT", "TIAUSDT", "GALAUSDT", "SANDUSDT", "MANAUSDT",
+                "AXSUSDT", "SNXUSDT", "CRVUSDT", "LDOUSDT", "STXUSDT", "IMXUSDT", "NEARUSDT", "FILUSDT",
+                "ATOMUSDT", "UNIUSDT", "AAVEUSDT", "MKRUSDT", "COMPUSDT", "DYDXUSDT", "WLDUSDT", "ORDIUSDT"
+            )
         }
     }
 
@@ -202,7 +207,7 @@ class TradingScannerService : Service() {
                     }
                 }
             } catch (e: Exception) { }
-            delay(5000) // Se actualiza cada 5 seg
+            delay(5000)
         }
     }
 
@@ -228,11 +233,9 @@ class TradingScannerService : Service() {
                     tokenData.series.addBar(bar)
                 }
 
-                // Calentamiento Forzado
                 if (tokenData.series.barCount >= 200) {
                     evaluateStrategy(symbol, tokenData, esEvaluacionInicial = true)
                 }
-
                 emitirLogApp("[OK] Descargadas 250 velas de $symbol", true)
             }
         } catch (e: Exception) { verificarBaneo(e) }
@@ -268,12 +271,25 @@ class TradingScannerService : Service() {
 
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
                 if (isRunning) {
-                    emitirLogApp("⚠️ Reconectando WS en 5s...", true)
-                    Thread.sleep(5000)
-                    conectarWebSocket(symbols, duration)
+                    emitirLogApp("⚠️ Error WS: ${t.message}. Reconectando...", true)
+                    reconectarSeguro(symbols, duration)
+                }
+            }
+
+            override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
+                if (isRunning) {
+                    emitirLogApp("🔄 Binance cerró el WS (Normal). Reconectando...", true)
+                    reconectarSeguro(symbols, duration)
                 }
             }
         })
+    }
+
+    private fun reconectarSeguro(symbols: List<String>, duration: Duration) {
+        CoroutineScope(Dispatchers.IO).launch {
+            delay(5000)
+            conectarWebSocket(symbols, duration)
+        }
     }
 
     private fun actualizarVela(
@@ -291,13 +307,15 @@ class TradingScannerService : Service() {
         )
 
         try {
-            if (tokenData.series.barCount > 0 && tokenData.series.lastBar.endTime.isEqual(endZoned)) {
+            if (tokenData.series.barCount == 0) return
+
+            val lastBar = tokenData.series.lastBar
+            if (endZoned.isEqual(lastBar.endTime)) {
+                // Actualiza el precio de la vela actual en vivo (sin esperar a que cierre)
                 tokenData.series.addBar(bar, true)
-
-                // EVALUACIÓN EN TIEMPO REAL (Vela viva)
                 evaluateStrategy(symbol, tokenData)
-
-            } else if (isClosed) {
+            } else if (endZoned.isAfter(lastBar.endTime)) {
+                // Pasa a la siguiente vela sin trabarse
                 tokenData.series.addBar(bar)
                 evaluateStrategy(symbol, tokenData)
             }
@@ -305,7 +323,7 @@ class TradingScannerService : Service() {
     }
 
     // =========================================================================
-    // CORAZÓN MATEMÁTICO EXTREMADAMENTE OPTIMIZADO
+    // CORAZÓN MATEMÁTICO
     // =========================================================================
     private fun evaluateStrategy(symbol: String, tData: TokenData, esEvaluacionInicial: Boolean = false) {
         if (tData.series.barCount < 200) return
@@ -313,9 +331,6 @@ class TradingScannerService : Service() {
         val lastIdx = tData.series.endIndex
         val prevIdx = lastIdx - 1
 
-        // 1. Extraemos los valores EXIGIENDO el cálculo de la librería
-        // Al estar los indicadores creados una sola vez en TokenData,
-        // TA4J usa la caché interna y devuelve el valor en milisegundos.
         val closeActual = tData.closePrice.getValue(lastIdx).doubleValue()
         val closePrevio = tData.closePrice.getValue(prevIdx).doubleValue()
 
@@ -335,9 +350,6 @@ class TradingScannerService : Service() {
         val volActual = tData.volumeInd.getValue(lastIdx).doubleValue()
         val volSmaActual = tData.volSma.getValue(lastIdx).doubleValue()
 
-        val bbUpperActual = tData.bbUpper.getValue(lastIdx).doubleValue()
-        val bbLowerActual = tData.bbLower.getValue(lastIdx).doubleValue()
-
         val macdHistAct = tData.macdLine.getValue(lastIdx).doubleValue() - tData.macdSignal.getValue(lastIdx).doubleValue()
         val macdHistPrev = tData.macdLine.getValue(prevIdx).doubleValue() - tData.macdSignal.getValue(prevIdx).doubleValue()
 
@@ -347,7 +359,6 @@ class TradingScannerService : Service() {
         val spread = spreadCache[symbol] ?: 0.0
         val volRatio = if (volSmaActual > 0) volActual / volSmaActual else 0.0
 
-        val hora = java.text.SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(java.util.Date())
         val logHeader = """
             
             --- ANALIZANDO: $symbol ---
@@ -370,7 +381,7 @@ class TradingScannerService : Service() {
             return
         }
 
-        // --- GATILLO FRANCOTIRADOR ---
+        // --- GATILLO ---
         val tendenciaAlcista = closeActual > ema200Actual
         val tendenciaBajista = closeActual < ema200Actual
 
@@ -403,9 +414,6 @@ class TradingScannerService : Service() {
             }
         }
 
-        // =====================================================================
-        // ORDEN BOOK Y TRADES (Llamadas asíncronas seguras)
-        // =====================================================================
         CoroutineScope(Dispatchers.IO).launch {
             try {
                 val obUrl = "https://fapi.binance.com/fapi/v1/depth?symbol=$symbol&limit=5"
@@ -450,14 +458,16 @@ class TradingScannerService : Service() {
                 if (distSl > topeMax) distSl = topeMax
                 if (distSl < topeMin) distSl = topeMin
 
-                var valPosNominal = margenOp * config.apalancamiento
+                val valPosNominal = margenOp * config.apalancamiento
                 val cantMonedas = if (closeActual > 0) valPosNominal / closeActual else 0.0
 
                 val perdidaPotencial = distSl * cantMonedas
                 val riesgoMaximo = billeteraVirtualUsdt * 0.04
 
+                // Validación de Riesgo Máximo (Resuelve el Warning de 'margenOp is never used')
                 if (perdidaPotencial > riesgoMaximo && distSl > 0) {
                     margenOp = (riesgoMaximo / distSl) * (closeActual / config.apalancamiento)
+                    Log.d("ScannerRiesgo", "Se redujo el margen a: $margenOp USDT para no superar el 4% de pérdida.")
                 }
 
                 val distTp = distSl * config.multiplicadorTp
