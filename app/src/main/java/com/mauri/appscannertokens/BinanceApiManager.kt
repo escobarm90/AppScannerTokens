@@ -109,9 +109,33 @@ object BinanceApiManager {
             }
 
             val ts2 = System.currentTimeMillis()
-            val qtyStr = BigDecimal.valueOf(quantity).stripTrailingZeros().toPlainString()
-            val priceStr = BigDecimal.valueOf(price).stripTrailingZeros().toPlainString()
 
+            // --- NUEVO ARREGLO: Redondeo Dinámico (Evita error de Precision) ---
+            val scaleQty = when {
+                quantity >= 1000 -> 0   // Monedas baratas: Cantidades enteras
+                quantity >= 10 -> 1
+                quantity >= 1 -> 2
+                else -> 3               // Monedas caras: Hasta 3 decimales
+            }
+
+            val scalePrice = when {
+                price >= 1000 -> 2      // BTC/ETH
+                price >= 10 -> 3        // SOL/AVAX
+                price >= 1 -> 4         // ADA/XRP
+                price >= 0.1 -> 5       // DOGE
+                else -> 7               // SHIB/PEPE
+            }
+
+            val qtyStr = BigDecimal.valueOf(quantity)
+                .setScale(scaleQty, java.math.RoundingMode.DOWN)
+                .stripTrailingZeros().toPlainString()
+
+            val priceStr = BigDecimal.valueOf(price)
+                .setScale(scalePrice, java.math.RoundingMode.DOWN)
+                .stripTrailingZeros().toPlainString()
+            // ------------------------------------------------------------------
+
+            // --- ARREGLO ANTERIOR INTACTO: Orden y Firma (Evita error de Signature) ---
             // 1. Armamos la cadena base
             var queryOrden = "symbol=$symbol&side=$side&type=$orderType&quantity=$qtyStr"
 
@@ -141,6 +165,7 @@ object BinanceApiManager {
             formBuilder.add("recvWindow", "60000")
             formBuilder.add("timestamp", ts2.toString())
             formBuilder.add("signature", sigOrden)
+            // ------------------------------------------------------------------
 
             val reqOrden = Request.Builder().url("https://fapi.binance.com/fapi/v1/order").post(formBuilder.build()).addHeader("X-MBX-APIKEY", apiKey).build()
 
