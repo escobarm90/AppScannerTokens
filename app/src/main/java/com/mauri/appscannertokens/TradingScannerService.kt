@@ -81,10 +81,14 @@ class TradingScannerService : Service() {
     private val spreadCache = ConcurrentHashMap<String, Double>()
     private val registroBloqueo = ConcurrentHashMap<String, Long>()
 
+    // 👇 ¡ESTA ES LA LÍNEA QUE FALTABA! 👇
+    private var billeteraVirtualUsdt = 20.0
+
     companion object {
         const val CHANNEL_ID = "TradingScannerChannel"
         const val NOTIFICATION_ID = 1
         var isRunning = false
+        var isDebugMode = true
     }
 
     override fun onCreate() {
@@ -121,6 +125,23 @@ class TradingScannerService : Service() {
         AlertManager.agregarLog(mensaje)
     }
 
+    private suspend fun actualizarBilletera() {
+        while (isRunning) {
+            try {
+                if (config.apiKey.isNotEmpty() && config.apiSecret.isNotEmpty()) {
+                    val saldoReal = BinanceApiManager.obtenerSaldoUSDT(config.apiKey, config.apiSecret)
+                    if (saldoReal > 0) {
+                        billeteraVirtualUsdt = saldoReal
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e("ScannerDebug", "Error actualizando billetera: ${e.message}")
+            }
+            // Actualiza la billetera cada 1 minuto para no saturar la API
+            delay(60000)
+        }
+    }
+
     private suspend fun iniciarMotorEscaner() = coroutineScope {
         emitirLogApp("🚀 Filtrando contratos Perpetuos USDT...")
 
@@ -142,6 +163,7 @@ class TradingScannerService : Service() {
         conectarWebSocket(topSymbols, duration)
 
         launch { actualizarSpreads(topSymbols) }
+        launch { actualizarBilletera() } // <--- AGREGAR ESTO
 
         // BUCLE SECUENCIAL EXACTO AL DE PYTHON
         launch {
