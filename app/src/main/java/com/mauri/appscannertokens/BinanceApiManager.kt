@@ -242,8 +242,31 @@ object BinanceApiManager {
     suspend fun crearOrdenStop(apiKey: String, apiSecret: String, symbol: String, side: String, type: String, stopPrice: Double): Boolean = withContext(Dispatchers.IO) {
         try {
             val ts = System.currentTimeMillis()
-            val priceStr = BigDecimal.valueOf(stopPrice).setScale(6, java.math.RoundingMode.HALF_DOWN).stripTrailingZeros().toPlainString()
-            val form = FormBody.Builder().add("symbol", symbol).add("side", side).add("type", type).add("stopPrice", priceStr).add("closePosition", "true").add("workingType", "CONTRACT_PRICE").add("recvWindow", "60000").add("timestamp", ts.toString())
+
+            // --- NUEVO: Redondeo Dinámico Inteligente para el TP/SL ---
+            val scalePrice = when {
+                stopPrice >= 1000 -> 2      // BTC/ETH
+                stopPrice >= 10 -> 3        // SOL/AVAX
+                stopPrice >= 1 -> 4         // ADA/XRP
+                stopPrice >= 0.1 -> 5       // DOGE
+                else -> 7                   // SHIB/PEPE
+            }
+
+            val priceStr = BigDecimal.valueOf(stopPrice)
+                .setScale(scalePrice, java.math.RoundingMode.DOWN)
+                .stripTrailingZeros().toPlainString()
+            // ----------------------------------------------------------
+
+            val form = FormBody.Builder()
+                .add("symbol", symbol)
+                .add("side", side)
+                .add("type", type)
+                .add("stopPrice", priceStr)
+                .add("closePosition", "true")
+                .add("workingType", "CONTRACT_PRICE")
+                .add("recvWindow", "60000")
+                .add("timestamp", ts.toString())
+
             val query = "symbol=$symbol&side=$side&type=$type&stopPrice=$priceStr&closePosition=true&workingType=CONTRACT_PRICE&recvWindow=60000&timestamp=$ts"
             val sig = crearFirma(query, apiSecret)
             form.add("signature", sig)
