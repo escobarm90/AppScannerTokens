@@ -128,7 +128,7 @@ fun AlertCard(
                 }
             }
 
-            // --- BOTONES COMPRA/VENTA (CON INICIO DE TRAILING) ---
+// --- BOTONES COMPRA/VENTA (CON INICIO DE TRAILING) ---
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 val side = if (alerta.senal == "LONG") "BUY" else "SELL"
                 val cantidadMonedas = if (alerta.precio > 0) nominalCalculado / alerta.precio else 0.0
@@ -141,8 +141,15 @@ fun AlertCard(
                         }
                         isEjecutando = true
                         coroutineScope.launch {
-                            val (_, msj) = BinanceApiManager.ejecutarOrden(config.apiKey, config.apiSecret, alerta.symbol, side, "LIMIT", cantidadMonedas, alerta.precio, tipoMargen)
+                            // Extraemos el orderId de la nueva función Triple
+                            val (exito, msj, orderId) = BinanceApiManager.ejecutarOrden(config.apiKey, config.apiSecret, alerta.symbol, side, "LIMIT", cantidadMonedas, alerta.precio, tipoMargen)
                             Toast.makeText(context, msj, Toast.LENGTH_LONG).show()
+
+                            if (exito && orderId > 0) {
+                                // Delegamos la vigilancia y la colocación de SL/TP al PositionManager
+                                PositionManager.iniciarMonitoreo(config, alerta.symbol, alerta.senal, alerta.precio, alerta.tp, alerta.sl, config.apalancamiento, orderId)
+                                onDismiss()
+                            }
                             isEjecutando = false
                         }
                     },
@@ -160,21 +167,14 @@ fun AlertCard(
                         }
                         isEjecutando = true
                         coroutineScope.launch {
-                            // 1. Enviar orden a mercado
-                            val (exito, msj) = BinanceApiManager.ejecutarOrden(config.apiKey, config.apiSecret, alerta.symbol, side, "MARKET", cantidadMonedas, alerta.precio, tipoMargen)
+                            // Extraemos el orderId de la nueva función Triple
+                            val (exito, msj, orderId) = BinanceApiManager.ejecutarOrden(config.apiKey, config.apiSecret, alerta.symbol, side, "MARKET", cantidadMonedas, alerta.precio, tipoMargen)
                             Toast.makeText(context, msj, Toast.LENGTH_LONG).show()
 
-                            if (exito) {
-                                // 2. Iniciar escáner de Trailing en Segundo Plano
-                                PositionManager.iniciarMonitoreo(config, alerta.symbol, alerta.senal, alerta.precio, alerta.tp, config.apalancamiento)
-
-                                // 3. Colocar escudos físicos (TP y SL)
-                                val ladoSalida = if (alerta.senal == "LONG") "SELL" else "BUY"
-                                BinanceApiManager.crearOrdenStop(config.apiKey, config.apiSecret, alerta.symbol, ladoSalida, "TAKE_PROFIT_MARKET", alerta.tp)
-                                BinanceApiManager.crearOrdenStop(config.apiKey, config.apiSecret, alerta.symbol, ladoSalida, "STOP_MARKET", alerta.sl)
-
-                                AlertManager.agregarLog("🛡️ Escudos físicos colocados para ${alerta.symbol}.")
-                                onDismiss() // Descartar tarjeta tras apertura exitosa
+                            if (exito && orderId > 0) {
+                                // Delegamos la vigilancia y la colocación de SL/TP al PositionManager
+                                PositionManager.iniciarMonitoreo(config, alerta.symbol, alerta.senal, alerta.precio, alerta.tp, alerta.sl, config.apalancamiento, orderId)
+                                onDismiss()
                             }
                             isEjecutando = false
                         }

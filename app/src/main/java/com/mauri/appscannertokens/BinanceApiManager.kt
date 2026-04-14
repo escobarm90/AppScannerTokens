@@ -91,7 +91,7 @@ object BinanceApiManager {
     suspend fun ejecutarOrden(
         apiKey: String, apiSecret: String, symbol: String, side: String,
         orderType: String, quantity: Double, price: Double, marginType: String
-    ): Pair<Boolean, String> = withContext(Dispatchers.IO) {
+    ): Triple<Boolean, String, Long> = withContext(Dispatchers.IO) {
         try {
             val ts1 = System.currentTimeMillis()
             val queryMargen = "symbol=$symbol&marginType=$marginType&recvWindow=60000&timestamp=$ts1"
@@ -171,10 +171,30 @@ object BinanceApiManager {
 
             client.newCall(reqOrden).execute().use { res ->
                 val body = res.body?.string() ?: ""
-                if (res.isSuccessful) Pair(true, "¡Orden $orderType de $symbol enviada!")
-                else Pair(false, "Error: ${JSONObject(body).optString("msg")}")
+                if (res.isSuccessful) {
+                    val orderId = JSONObject(body).optLong("orderId", 0L)
+                    Triple(true, "¡Orden $orderType de $symbol enviada!", orderId)
+                } else {
+                    Triple(false, "Error: ${JSONObject(body).optString("msg")}", 0L)
+                }
             }
-        } catch (e: Exception) { Pair(false, "Excepción: ${e.message}") }
+        } catch (e: Exception) { Triple(false, "Excepción: ${e.message}", 0L) }
+    }
+
+    suspend fun obtenerEstadoOrden(apiKey: String, apiSecret: String, symbol: String, orderId: Long): String = withContext(Dispatchers.IO) {
+        try {
+            val ts = System.currentTimeMillis()
+            val query = "symbol=$symbol&orderId=$orderId&recvWindow=60000&timestamp=$ts"
+            val sig = crearFirma(query, apiSecret)
+            val req = Request.Builder().url("https://fapi.binance.com/fapi/v1/order?$query&signature=$sig").addHeader("X-MBX-APIKEY", apiKey).get().build()
+
+            client.newCall(req).execute().use { res ->
+                if (res.isSuccessful) {
+                    return@withContext JSONObject(res.body?.string() ?: "").optString("status", "UNKNOWN")
+                }
+            }
+        } catch (e: Exception) {}
+        return@withContext "UNKNOWN"
     }
 
     // ==========================================
