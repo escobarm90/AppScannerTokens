@@ -24,23 +24,35 @@ object BinanceApiManager {
         return mac.doFinal(data.toByteArray()).joinToString("") { "%02x".format(it) }
     }
 
-    // --- NUEVO: Extrae la precisión exacta de Binance (Igual que en Python) ---
-    // --- NUEVO: Extrae la precisión exacta de Binance (Igual que en Python) ---
+
+
+    // Cache en memoria para no descargar 2MB desde Binance en cada orden
+    private var exchangeInfoCache: com.google.gson.JsonArray? = null
+    private var lastCacheTime: Long = 0
+
     suspend fun obtenerPrecisiones(symbol: String): Pair<Int, Int> = withContext(Dispatchers.IO) {
         try {
-            val req = Request.Builder().url("https://fapi.binance.com/fapi/v1/exchangeInfo").get().build()
-            client.newCall(req).execute().use { res ->
-                if (res.isSuccessful) {
-                    val body = res.body?.string() ?: return@withContext Pair(3, 4)
-                    val json = JsonParser.parseString(body).asJsonObject
-                    val symbols = json.getAsJsonArray("symbols")
-                    for (i in 0 until symbols.size()) {
-                        val symObj = symbols.get(i).asJsonObject
-                        if (symObj.get("symbol").asString == symbol) {
-                            val qtyPrec = symObj.get("quantityPrecision").asInt
-                            val pricePrec = symObj.get("pricePrecision").asInt
-                            return@withContext Pair(qtyPrec, pricePrec)
-                        }
+            // Si el caché está vacío o pasaron más de 24 horas, descargamos de nuevo
+            if (exchangeInfoCache == null || System.currentTimeMillis() - lastCacheTime > 86400000) {
+                val req = Request.Builder().url("https://fapi.binance.com/fapi/v1/exchangeInfo").get().build()
+                client.newCall(req).execute().use { res ->
+                    if (res.isSuccessful) {
+                        val body = res.body?.string() ?: return@withContext Pair(3, 4)
+                        val json = JsonParser.parseString(body).asJsonObject
+                        exchangeInfoCache = json.getAsJsonArray("symbols")
+                        lastCacheTime = System.currentTimeMillis()
+                    }
+                }
+            }
+
+            // Buscamos rápido en la memoria RAM (Tarda 0.001 segundos)
+            exchangeInfoCache?.let { symbols ->
+                for (i in 0 until symbols.size()) {
+                    val symObj = symbols.get(i).asJsonObject
+                    if (symObj.get("symbol").asString == symbol) {
+                        val qtyPrec = symObj.get("quantityPrecision").asInt
+                        val pricePrec = symObj.get("pricePrecision").asInt
+                        return@withContext Pair(qtyPrec, pricePrec)
                     }
                 }
             }
