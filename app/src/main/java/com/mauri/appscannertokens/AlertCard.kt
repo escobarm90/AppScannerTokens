@@ -28,7 +28,7 @@ fun AlertCard(
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
 
-    var porcentajeUsado by remember { mutableStateOf(30f) }
+    var porcentajeUsado by remember { mutableFloatStateOf(30f) }
     var isCruzado by remember { mutableStateOf(false) }
     val tipoMargen = if (isCruzado) "CROSSED" else "ISOLATED"
     var isEjecutando by remember { mutableStateOf(false) }
@@ -45,9 +45,15 @@ fun AlertCard(
 
     val margenCalculado = if (billetera > 0) billetera * (porcentajeUsado / 100.0) else 0.0
     val nominalCalculado = margenCalculado * config.apalancamiento
-    val distanciaTpPct = if (alerta.precio > 0) Math.abs(alerta.tp - alerta.precio) / alerta.precio else 0.0
-    val pnlCalculado = nominalCalculado * distanciaTpPct
+    val distanciaTpPct = if (alerta.precio > 0) kotlin.math.abs(alerta.tp - alerta.precio) / alerta.precio else 0.0
+    val pnlBrutoCalculado = nominalCalculado * distanciaTpPct
     val roeCalculado = distanciaTpPct * config.apalancamiento * 100.0
+
+    // Cálculo de comisiones (Estimamos 0.05% Taker para apertura y 0.05% para cierre)
+    val feeAperturaEst = nominalCalculado * 0.0005
+    val feeCierreEst = nominalCalculado * 0.0005
+    val totalFeesEst = feeAperturaEst + feeCierreEst
+    val pnlNetoCalculado = pnlBrutoCalculado - totalFeesEst
 
     Card(
         modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
@@ -92,10 +98,35 @@ fun AlertCard(
             }
 
             Text("Invertir: ${porcentajeUsado.toInt()}% de tu billetera", color = Color.White, fontSize = 14.sp)
-            Slider(
-                value = porcentajeUsado, onValueChange = { porcentajeUsado = it }, valueRange = 5f..100f, steps = 19,
-                colors = SliderDefaults.colors(thumbColor = if (isCruzado) colorCyan else colorYellow, activeTrackColor = if (isCruzado) colorCyan else colorYellow)
-            )
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                // Botón -
+                IconButton(
+                    onClick = { if (porcentajeUsado > 5f) porcentajeUsado -= 1f },
+                    modifier = Modifier.size(32.dp)
+                ) {
+                    Text("-", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 24.sp)
+                }
+
+                // Slider Sensible
+                Slider(
+                    value = porcentajeUsado,
+                    onValueChange = { porcentajeUsado = kotlin.math.round(it) },
+                    valueRange = 5f..100f,
+                    modifier = Modifier.weight(1f).padding(horizontal = 8.dp),
+                    colors = SliderDefaults.colors(
+                        thumbColor = if (isCruzado) colorCyan else colorYellow,
+                        activeTrackColor = if (isCruzado) colorCyan else colorYellow
+                    )
+                )
+
+                // Botón +
+                IconButton(
+                    onClick = { if (porcentajeUsado < 100f) porcentajeUsado += 1f },
+                    modifier = Modifier.size(32.dp)
+                ) {
+                    Text("+", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 24.sp)
+                }
+            }
 
             // --- BOTONES COMPRA/VENTA (CON INICIO DE TRAILING) ---
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -110,7 +141,7 @@ fun AlertCard(
                         }
                         isEjecutando = true
                         coroutineScope.launch {
-                            val (exito, msj) = BinanceApiManager.ejecutarOrden(config.apiKey, config.apiSecret, alerta.symbol, side, "LIMIT", cantidadMonedas, alerta.precio, tipoMargen)
+                            val (_, msj) = BinanceApiManager.ejecutarOrden(config.apiKey, config.apiSecret, alerta.symbol, side, "LIMIT", cantidadMonedas, alerta.precio, tipoMargen)
                             Toast.makeText(context, msj, Toast.LENGTH_LONG).show()
                             isEjecutando = false
                         }
@@ -167,11 +198,30 @@ fun AlertCard(
             // --- RESULTADOS ESTIMADOS ---
             Text("🏦 RESULTADOS ESTIMADOS", color = colorYellow, fontSize = 12.sp, fontWeight = FontWeight.Bold)
             DataRow("Margen a Usar ($tipoMargen)", String.format(Locale.US, "$%.2f USDT", margenCalculado), Color.White)
+            DataRow("Tamaño de Posición (Apalancado)", String.format(Locale.US, "$%.2f USDT", nominalCalculado), Color.LightGray)
+
+            HorizontalDivider(modifier = Modifier.padding(vertical = 6.dp), color = colorBorde.copy(alpha = 0.5f))
+
+            // Detalle de comisiones
+            Text("💸 Gastos de Operación (Fees Binance)", color = Color.Gray, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+            DataRow("Fee Apertura Est. (0.05%)", String.format(Locale.US, "-$%.4f USDT", feeAperturaEst), colorRed.copy(alpha = 0.8f))
+            DataRow("Fee Cierre Est. (0.05%)", String.format(Locale.US, "-$%.4f USDT", feeCierreEst), colorRed.copy(alpha = 0.8f))
+
+            HorizontalDivider(modifier = Modifier.padding(vertical = 6.dp), color = colorBorde.copy(alpha = 0.5f))
+
+            // PNL Bruto y Neto
             Row(modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp), horizontalArrangement = Arrangement.SpaceBetween) {
-                Text("PNL Neto Est. (Si toca TP)", color = Color.Gray, fontSize = 14.sp)
+                Text("PNL Bruto Est. (Al tocar TP)", color = Color.Gray, fontSize = 13.sp)
                 Text(
-                    text = String.format(Locale.US, "$%.2f USDT (+%.2f%%)", pnlCalculado, roeCalculado),
-                    color = colorGreen, fontWeight = FontWeight.Bold, fontSize = 14.sp
+                    text = String.format(Locale.US, "$%.2f USDT (+%.2f%%)", pnlBrutoCalculado, roeCalculado),
+                    color = Color.LightGray, fontWeight = FontWeight.Normal, fontSize = 13.sp
+                )
+            }
+            Row(modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp), horizontalArrangement = Arrangement.SpaceBetween) {
+                Text("PNL NETO (Ganancia Limpia)", color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                Text(
+                    text = String.format(Locale.US, "$%.2f USDT", pnlNetoCalculado),
+                    color = if (pnlNetoCalculado > 0) colorGreen else colorRed, fontWeight = FontWeight.ExtraBold, fontSize = 15.sp
                 )
             }
         }

@@ -98,7 +98,7 @@ fun ConfigScreen(
                         }
                         isTesting = true
                         coroutineScope.launch {
-                            val (exito, msj) = BinanceApiManager.probarConexion(config.apiKey, config.apiSecret)
+                            val (_, msj) = BinanceApiManager.probarConexion(config.apiKey, config.apiSecret)
                             Toast.makeText(context, msj, Toast.LENGTH_LONG).show()
                             isTesting = false
                         }

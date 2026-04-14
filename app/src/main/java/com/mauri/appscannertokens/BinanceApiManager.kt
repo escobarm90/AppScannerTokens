@@ -112,15 +112,35 @@ object BinanceApiManager {
             val qtyStr = BigDecimal.valueOf(quantity).stripTrailingZeros().toPlainString()
             val priceStr = BigDecimal.valueOf(price).stripTrailingZeros().toPlainString()
 
-            var queryOrden = "symbol=$symbol&side=$side&type=$orderType&quantity=$qtyStr&timestamp=$ts2"
-            if (orderType == "LIMIT") queryOrden += "&price=$priceStr&timeInForce=GTC"
+            // 1. Armamos la cadena base
+            var queryOrden = "symbol=$symbol&side=$side&type=$orderType&quantity=$qtyStr"
 
+            // 2. Si es LIMIT, agregamos los extras inmediatamente
+            if (orderType == "LIMIT") {
+                queryOrden += "&price=$priceStr&timeInForce=GTC"
+            }
+
+            // 3. Cerramos SIEMPRE con recvWindow y timestamp al final
+            queryOrden += "&recvWindow=60000&timestamp=$ts2"
+
+            // 4. Firmamos la cadena completa y correcta
             val sigOrden = crearFirma(queryOrden, apiSecret)
 
+            // 5. Armamos el FormBody en el MISMO orden exacto
             val formBuilder = FormBody.Builder()
-                .add("symbol", symbol).add("side", side).add("type", orderType)
-                .add("quantity", qtyStr).add("recvWindow", "60000").add("timestamp", ts2.toString()).add("signature", sigOrden)
-            if (orderType == "LIMIT") formBuilder.add("price", priceStr).add("timeInForce", "GTC")
+                .add("symbol", symbol)
+                .add("side", side)
+                .add("type", orderType)
+                .add("quantity", qtyStr)
+
+            if (orderType == "LIMIT") {
+                formBuilder.add("price", priceStr)
+                formBuilder.add("timeInForce", "GTC")
+            }
+
+            formBuilder.add("recvWindow", "60000")
+            formBuilder.add("timestamp", ts2.toString())
+            formBuilder.add("signature", sigOrden)
 
             val reqOrden = Request.Builder().url("https://fapi.binance.com/fapi/v1/order").post(formBuilder.build()).addHeader("X-MBX-APIKEY", apiKey).build()
 

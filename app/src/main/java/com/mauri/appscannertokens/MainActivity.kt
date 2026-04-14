@@ -105,14 +105,14 @@ fun MonitorScreen(onOpenConfig: () -> Unit) {
 
         Spacer(modifier = Modifier.height(16.dp))
 
-        // --- MENÚ DE NAVEGACIÓN (TABS) ---
-        TabRow(
+// --- MENÚ DE NAVEGACIÓN (TABS) ---
+        SecondaryTabRow(
             selectedTabIndex = pagerState.currentPage,
             containerColor = colorFondo,
             contentColor = colorPrimary,
-            indicator = { tabPositions ->
+            indicator = {
                 TabRowDefaults.SecondaryIndicator(
-                    Modifier.tabIndicatorOffset(tabPositions[pagerState.currentPage]),
+                    Modifier.tabIndicatorOffset(pagerState.currentPage),
                     color = colorPrimary
                 )
             }
