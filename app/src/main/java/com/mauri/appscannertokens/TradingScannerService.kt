@@ -304,6 +304,8 @@ class TradingScannerService : Service() {
 
         val macdHistAct = tData.macdLine.getValue(prev).doubleValue() - tData.macdSignal.getValue(prev).doubleValue()
         val macdHistPrev = tData.macdLine.getValue(ante).doubleValue() - tData.macdSignal.getValue(ante).doubleValue()
+        val bbUpperActual = tData.bbUpper.getValue(prev).doubleValue()
+        val bbLowerActual = tData.bbLower.getValue(prev).doubleValue()
 
         val atrPct = if (closeActual > 0) (atrActual / closeActual * 100) else 0.0
         val spread = spreadCache[symbol] ?: 0.0
@@ -315,6 +317,7 @@ class TradingScannerService : Service() {
             Precio: $closeActual | RSI: ${String.format("%.2f", rsiActual)}
             ATR (%): ${String.format("%.3f", atrPct)}% (Req: >= 0.50%)
             ADX (14): ${String.format("%.2f", adxActual)} (Req: >= 18)
+            BB UPPER: ${String.format("%.5f", bbUpperActual)} | BB LOWER: ${String.format("%.5f", bbLowerActual)}
             Vol Ratio: ${String.format("%.2f", volRatio)}x (Req: >= 1.20x)
             Spread: ${String.format("%.3f", spread)}% (Req: <= 0.10%)
         """.trimIndent()
@@ -340,6 +343,19 @@ class TradingScannerService : Service() {
         }
 
         if (senal == "NEUTRAL") { emitirLogApp("ESTADO: SIN SEÑAL TÉCNICA"); return }
+
+        // =====================================================
+        // NUEVO: FILTRO BOLLINGER ANTI-EXTENUACIÓN (ANTI-FOMO)
+        // =====================================================
+        if (senal == "LONG" && closeCerrada >= bbUpperActual) {
+            emitirLogApp("$log\n❌ RECHAZADO: EXTENUACIÓN ALCISTA (Rozando techo de Bollinger)")
+            return
+        }
+        if (senal == "SHORT" && closeCerrada <= bbLowerActual) {
+            emitirLogApp("$log\n❌ RECHAZADO: EXTENUACIÓN BAJISTA (Rozando suelo de Bollinger)")
+            return
+        }
+        // =====================================================
 
         // VERIFICACIÓN DE MUROS Y TRADES
         CoroutineScope(Dispatchers.IO).launch {
