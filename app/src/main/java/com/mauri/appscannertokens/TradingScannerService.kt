@@ -2,7 +2,6 @@ package com.mauri.appscannertokens
 
 import android.app.NotificationChannel
 import android.app.NotificationManager
-import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
@@ -276,16 +275,15 @@ class TradingScannerService : Service() {
         val tData = marketData[symbol] ?: return
         val time = ZonedDateTime.ofInstant(Instant.ofEpochMilli(t), ZoneId.of("UTC"))
 
-        // BLOQUEO CRÍTICO: El escáner espera a que el WebSocket termine de escribir
         synchronized(tData) {
             try {
-                // Eliminamos la notación científica nativamente
+                // Como ya son String puros desde el WebSocket, no necesitamos convertirlos
                 val bar = BaseBar(d, time,
-                    DecimalNum.valueOf(java.math.BigDecimal.valueOf(o).toPlainString()),
-                    DecimalNum.valueOf(java.math.BigDecimal.valueOf(h).toPlainString()),
-                    DecimalNum.valueOf(java.math.BigDecimal.valueOf(l).toPlainString()),
-                    DecimalNum.valueOf(java.math.BigDecimal.valueOf(c).toPlainString()),
-                    DecimalNum.valueOf(java.math.BigDecimal.valueOf(v).toPlainString()),
+                    DecimalNum.valueOf(o),
+                    DecimalNum.valueOf(h),
+                    DecimalNum.valueOf(l),
+                    DecimalNum.valueOf(c),
+                    DecimalNum.valueOf(v),
                     DecimalNum.valueOf("0.0")
                 )
                 if (tData.series.barCount == 0) return
@@ -296,7 +294,7 @@ class TradingScannerService : Service() {
     }
 
     // =========================================================================
-    // LÓGICA DE ESTRATEGIA (REPLICA DE main.py)
+    // LÓGICA DE ESTRATEGIA OPTIMIZADA (ANTI-SPAM Y ANTI-BANEO)
     // =========================================================================
     private fun evaluateStrategy(symbol: String, tData: TokenData) {
         val idx: Int; val prev: Int; val ante: Int
@@ -307,13 +305,13 @@ class TradingScannerService : Service() {
         val macdHistAct: Double; val macdHistPrev: Double
         val bbUpperActual: Double; val bbLowerActual: Double
 
-        // BLOQUEO CRÍTICO: Tomamos una "foto" de la matemática sin que el WebSocket nos interrumpa
+        // BLOQUEO: Tomamos una "foto" matemática segura
         synchronized(tData) {
             idx = tData.series.endIndex
             prev = idx - 1
             ante = idx - 2
 
-            if (ante < 0) return // Seguridad extra
+            if (ante < 0) return // Seguridad por si la moneda es nueva
 
             closeActual = tData.closePrice.getValue(idx).doubleValue()
             closeCerrada = tData.closePrice.getValue(prev).doubleValue()
@@ -335,26 +333,18 @@ class TradingScannerService : Service() {
             bbLowerActual = tData.bbLower.getValue(prev).doubleValue()
         }
 
+        // SISTEMA DE COOLDOWN PRINCIPAL (Si ya alertó hace menos de 5 mins, ignoramos)
+        val lastMain = registroBloqueo[symbol] ?: 0L
+        if (System.currentTimeMillis() - lastMain < 300000) return
+
         val atrPct = if (closeActual > 0) (atrActual / closeActual * 100) else 0.0
         val spread = spreadCache[symbol] ?: 0.0
         val volRatio = if (volSma > 0) volCerrado / volSma else 0.0
 
-        // PANEL MODO DEBUG EN CONSOLA
-        val log = """
-            --- ANALIZANDO: $symbol ---
-            Precio: $closeActual | RSI: ${String.format("%.2f", rsiActual)}
-            ATR (%): ${String.format("%.3f", atrPct)}% (Req: >= 0.50%)
-            ADX (14): ${String.format("%.2f", adxActual)} (Req: >= 18)
-            BB UPPER: ${String.format("%.5f", bbUpperActual)} | BB LOWER: ${String.format("%.5f", bbLowerActual)}
-            Vol Ratio: ${String.format("%.2f", volRatio)}x (Req: >= 1.20x)
-            Spread: ${String.format("%.3f", spread)}% (Req: <= 0.10%)
-        """.trimIndent()
-        emitirLogApp(log)
-
-        // RECHAZOS TÉCNICOS
-        if (spread > 0.10) { emitirLogApp("ESTADO: RECHAZADO - SPREAD ALTO"); return }
-        if (atrPct < 0.50) { emitirLogApp("ESTADO: RECHAZADO - MERCADO PLANO"); return }
-        if (volRatio < 1.20) { emitirLogApp("ESTADO: RECHAZADO - VOLUMEN BAJO"); return }
+        // RECHAZOS TÉCNICOS (Silenciosos para no congelar la pantalla del celular)
+        if (spread > 0.10) return
+        if (atrPct < 0.50) return
+        if (volRatio < 1.20) return
 
         // GATILLO FRANCOTIRADOR
         val tendenciaAlcista = closeCerrada > ema200Actual
@@ -370,81 +360,86 @@ class TradingScannerService : Service() {
             senal = "SHORT"
         }
 
-        if (senal == "NEUTRAL") { emitirLogApp("ESTADO: SIN SEÑAL TÉCNICA"); return }
+        if (senal == "NEUTRAL") return
 
-        // =====================================================
-        // NUEVO: FILTRO BOLLINGER ANTI-EXTENUACIÓN (ANTI-FOMO)
-        // =====================================================
+        // FILTRO BOLLINGER ANTI-EXTENUACIÓN
         if (senal == "LONG" && closeCerrada >= bbUpperActual) {
-            emitirLogApp("$log\n❌ RECHAZADO: EXTENUACIÓN ALCISTA (Rozando techo de Bollinger)")
+            emitirLogApp("❌ $symbol: Rechazo por Extenuación (Rozando techo Bollinger)")
             return
         }
         if (senal == "SHORT" && closeCerrada <= bbLowerActual) {
-            emitirLogApp("$log\n❌ RECHAZADO: EXTENUACIÓN BAJISTA (Rozando suelo de Bollinger)")
+            emitirLogApp("❌ $symbol: Rechazo por Extenuación (Rozando suelo Bollinger)")
             return
         }
-        // =====================================================
 
-        // VERIFICACIÓN DE MUROS Y TRADES
+        // VERIFICACIÓN DE MUROS Y TRADES (Con Protección Anti-Baneo Binance)
         CoroutineScope(Dispatchers.IO).launch {
             try {
                 // 1. Verificar Orderbook (Muros Limit)
                 val obUrl = "https://fapi.binance.com/fapi/v1/depth?symbol=$symbol&limit=5"
-                val ob = JsonParser.parseString(client.newCall(Request.Builder().url(obUrl).build()).execute().body?.string()).asJsonObject
+                val obResp = client.newCall(Request.Builder().url(obUrl).build()).execute().body?.string() ?: return@launch
+
+                // Blindaje contra errores de Binance
+                if (!obResp.startsWith("{")) return@launch
+
+                val ob = JsonParser.parseString(obResp).asJsonObject
                 var bidQty = 0.0; var askQty = 0.0
                 ob.getAsJsonArray("bids").forEach { bidQty += it.asJsonArray[1].asDouble }
                 ob.getAsJsonArray("asks").forEach { askQty += it.asJsonArray[1].asDouble }
 
-                if (senal == "LONG" && askQty > (bidQty * 3.5)) { emitirLogApp("$log\n❌ ESTADO: RECHAZADO - MURO DE VENTA"); return@launch }
-                if (senal == "SHORT" && bidQty > (askQty * 3.5)) { emitirLogApp("$log\n❌ ESTADO: RECHAZADO - MURO DE COMPRA"); return@launch }
+                if (senal == "LONG" && askQty > (bidQty * 3.5)) {
+                    emitirLogApp("❌ $symbol: RECHAZADO - MURO DE VENTA DETECTADO")
+                    registroBloqueo[symbol] = System.currentTimeMillis() - 240000 // Mini-cooldown de 60s
+                    return@launch
+                }
+                if (senal == "SHORT" && bidQty > (askQty * 3.5)) {
+                    emitirLogApp("❌ $symbol: RECHAZADO - MURO DE COMPRA DETECTADO")
+                    registroBloqueo[symbol] = System.currentTimeMillis() - 240000 // Mini-cooldown de 60s
+                    return@launch
+                }
 
-                // 2. Verificar Flujo de Trades Reales (El filtro que faltaba)
+                // 2. Verificar Flujo de Trades
                 val trUrl = "https://fapi.binance.com/fapi/v1/trades?symbol=$symbol&limit=500"
-                val trResp = client.newCall(Request.Builder().url(trUrl).build()).execute().body?.string()
-                val trJson = JsonParser.parseString(trResp).asJsonArray
+                val trResp = client.newCall(Request.Builder().url(trUrl).build()).execute().body?.string() ?: return@launch
+                if (!trResp.startsWith("[")) return@launch
 
+                val trJson = JsonParser.parseString(trResp).asJsonArray
                 var volTotal = 0.0; var volCompras = 0.0
                 trJson.forEach {
                     val qty = it.asJsonObject.get("qty").asDouble
                     val isBuyerMaker = it.asJsonObject.get("isBuyerMaker").asBoolean
                     volTotal += qty
-                    if (!isBuyerMaker) volCompras += qty // Si no es BuyerMaker, fue una compra a Market
+                    if (!isBuyerMaker) volCompras += qty
                 }
                 val pctCompras = if (volTotal > 0) (volCompras / volTotal) * 100 else 50.0
 
                 if ((senal == "LONG" && pctCompras < 40.0) || (senal == "SHORT" && pctCompras > 60.0)) {
-                    emitirLogApp("$log\n❌ ESTADO: RECHAZADO - FUERZA INSUFICIENTE EN TRADES (${String.format(Locale.US, "%.1f", pctCompras)}%)")
+                    emitirLogApp("❌ $symbol: RECHAZADO - Flujo de trades débil (${String.format(Locale.US, "%.1f", pctCompras)}%)")
+                    registroBloqueo[symbol] = System.currentTimeMillis() - 240000 // Mini-cooldown de 60s
                     return@launch
                 }
 
-                // 3. Sistema de Cooldown
-                val last = registroBloqueo[symbol] ?: 0L
-                if (System.currentTimeMillis() - last < 300000) { emitirLogApp("$log\n⏳ ESTADO: IGNORADO - COOLDOWN"); return@launch }
-
-                // 4. Cálculo exacto de SL y TP con topes de seguridad
+                // 🎯 ¡APROBACIÓN FINAL! Cálculo exacto de SL y TP
                 var distSl = atrActual * config.multiplicadorSl
-
-                val topeMax = closeActual * 0.008 // Máximo 0.8% de distancia
-                val topeMin = closeActual * 0.003 // Mínimo 0.3% de distancia
+                val topeMax = closeActual * 0.008 // Máximo 0.8%
+                val topeMin = closeActual * 0.003 // Mínimo 0.3%
 
                 if (distSl > topeMax) distSl = topeMax
                 if (distSl < topeMin) distSl = topeMin
 
-                // Usamos el multiplicador del usuario para el TP (Por defecto suele ser 1.5x o 2.0x el SL)
                 val distTp = distSl * config.multiplicadorTp
-
                 val tp = if (senal == "LONG") closeActual + distTp else closeActual - distTp
                 val sl = if (senal == "LONG") closeActual - distSl else closeActual + distSl
 
-                // Aprobación Final
+                // Bloqueo Completo de 5 minutos al dar la alerta
                 registroBloqueo[symbol] = System.currentTimeMillis()
-                emitirLogApp("$log\n🎯 ¡OPORTUNIDAD $senal DETECTADA!")
+                emitirLogApp("🎯 ¡OPORTUNIDAD $senal DETECTADA EN $symbol!")
 
                 val velasEst = Math.max(1, (distTp / atrActual).toInt())
                 AlertManager.agregarAlerta(AlertData(symbol, senal, closeActual, tp, sl, velasEst, config.timeframe))
 
             } catch (e: Exception) {
-                emitirLogApp("$log\n❌ Error API en validación final: ${e.message}")
+                // Si la red falla o Binance rechaza, lo ignoramos en silencio para que intente luego
             }
         }
     }
