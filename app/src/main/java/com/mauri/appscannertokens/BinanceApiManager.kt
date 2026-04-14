@@ -177,7 +177,7 @@ object BinanceApiManager {
     suspend fun crearOrdenStop(apiKey: String, apiSecret: String, symbol: String, side: String, type: String, stopPrice: Double): Boolean = withContext(Dispatchers.IO) {
         try {
             val ts = System.currentTimeMillis()
-            val priceStr = String.format(Locale.US, "%.5f", stopPrice)
+            val priceStr = BigDecimal.valueOf(stopPrice).setScale(6, java.math.RoundingMode.HALF_DOWN).stripTrailingZeros().toPlainString()
             val form = FormBody.Builder().add("symbol", symbol).add("side", side).add("type", type).add("stopPrice", priceStr).add("closePosition", "true").add("workingType", "CONTRACT_PRICE").add("recvWindow", "60000").add("timestamp", ts.toString())
             val query = "symbol=$symbol&side=$side&type=$type&stopPrice=$priceStr&closePosition=true&workingType=CONTRACT_PRICE&recvWindow=60000&timestamp=$ts"
             val sig = crearFirma(query, apiSecret)
