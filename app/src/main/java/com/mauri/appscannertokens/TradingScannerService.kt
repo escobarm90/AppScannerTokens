@@ -360,30 +360,64 @@ class TradingScannerService : Service() {
         // VERIFICACIÓN DE MUROS Y TRADES
         CoroutineScope(Dispatchers.IO).launch {
             try {
-                // Orderbook check (3.5x ratio)
+                // 1. Verificar Orderbook (Muros Limit)
                 val obUrl = "https://fapi.binance.com/fapi/v1/depth?symbol=$symbol&limit=5"
                 val ob = JsonParser.parseString(client.newCall(Request.Builder().url(obUrl).build()).execute().body?.string()).asJsonObject
                 var bidQty = 0.0; var askQty = 0.0
                 ob.getAsJsonArray("bids").forEach { bidQty += it.asJsonArray[1].asDouble }
                 ob.getAsJsonArray("asks").forEach { askQty += it.asJsonArray[1].asDouble }
 
-                if (senal == "LONG" && askQty > (bidQty * 3.5)) { emitirLogApp("ESTADO: RECHAZADO - MURO DE VENTA"); return@launch }
-                if (senal == "SHORT" && bidQty > (askQty * 3.5)) { emitirLogApp("ESTADO: RECHAZADO - MURO DE COMPRA"); return@launch }
+                if (senal == "LONG" && askQty > (bidQty * 3.5)) { emitirLogApp("$log\n❌ ESTADO: RECHAZADO - MURO DE VENTA"); return@launch }
+                if (senal == "SHORT" && bidQty > (askQty * 3.5)) { emitirLogApp("$log\n❌ ESTADO: RECHAZADO - MURO DE COMPRA"); return@launch }
 
-                // Cooldown check (300s)
+                // 2. Verificar Flujo de Trades Reales (El filtro que faltaba)
+                val trUrl = "https://fapi.binance.com/fapi/v1/trades?symbol=$symbol&limit=500"
+                val trResp = client.newCall(Request.Builder().url(trUrl).build()).execute().body?.string()
+                val trJson = JsonParser.parseString(trResp).asJsonArray
+
+                var volTotal = 0.0; var volCompras = 0.0
+                trJson.forEach {
+                    val qty = it.asJsonObject.get("qty").asDouble
+                    val isBuyerMaker = it.asJsonObject.get("isBuyerMaker").asBoolean
+                    volTotal += qty
+                    if (!isBuyerMaker) volCompras += qty // Si no es BuyerMaker, fue una compra a Market
+                }
+                val pctCompras = if (volTotal > 0) (volCompras / volTotal) * 100 else 50.0
+
+                if ((senal == "LONG" && pctCompras < 40.0) || (senal == "SHORT" && pctCompras > 60.0)) {
+                    emitirLogApp("$log\n❌ ESTADO: RECHAZADO - FUERZA INSUFICIENTE EN TRADES (${String.format(Locale.US, "%.1f", pctCompras)}%)")
+                    return@launch
+                }
+
+                // 3. Sistema de Cooldown
                 val last = registroBloqueo[symbol] ?: 0L
-                if (System.currentTimeMillis() - last < 300000) { emitirLogApp("ESTADO: IGNORADO - COOLDOWN"); return@launch }
+                if (System.currentTimeMillis() - last < 300000) { emitirLogApp("$log\n⏳ ESTADO: IGNORADO - COOLDOWN"); return@launch }
 
-                registroBloqueo[symbol] = System.currentTimeMillis()
-                emitirLogApp("🎯 ¡OPORTUNIDAD $senal DETECTADA!")
+                // 4. Cálculo exacto de SL y TP con topes de seguridad
+                var distSl = atrActual * config.multiplicadorSl
 
-                // Cálculo de TP/SL
-                val distSl = atrActual * 1.5 // multiplicador_sl default
-                val tp = if (senal == "LONG") closeActual + (distSl * 1.5) else closeActual - (distSl * 1.5)
+                val topeMax = closeActual * 0.008 // Máximo 0.8% de distancia
+                val topeMin = closeActual * 0.003 // Mínimo 0.3% de distancia
+
+                if (distSl > topeMax) distSl = topeMax
+                if (distSl < topeMin) distSl = topeMin
+
+                // Usamos el multiplicador del usuario para el TP (Por defecto suele ser 1.5x o 2.0x el SL)
+                val distTp = distSl * config.multiplicadorTp
+
+                val tp = if (senal == "LONG") closeActual + distTp else closeActual - distTp
                 val sl = if (senal == "LONG") closeActual - distSl else closeActual + distSl
 
-                AlertManager.agregarAlerta(AlertData(symbol, senal, closeActual, tp, sl, 1, config.timeframe))
-            } catch (e: Exception) { }
+                // Aprobación Final
+                registroBloqueo[symbol] = System.currentTimeMillis()
+                emitirLogApp("$log\n🎯 ¡OPORTUNIDAD $senal DETECTADA!")
+
+                val velasEst = Math.max(1, (distTp / atrActual).toInt())
+                AlertManager.agregarAlerta(AlertData(symbol, senal, closeActual, tp, sl, velasEst, config.timeframe))
+
+            } catch (e: Exception) {
+                emitirLogApp("$log\n❌ Error API en validación final: ${e.message}")
+            }
         }
     }
 
