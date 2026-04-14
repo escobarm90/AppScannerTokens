@@ -11,7 +11,8 @@
   <component name="ChangeListManager">
     <list default="true" id="f47cbd80-7e7b-4408-8a49-fc9584e2fa18" name="Changes" comment="Version 3.0 Funcionando">
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/app/src/main/java/com/mauri/appscannertokens/TradingScannerService.kt" beforeDir="false" afterPath="$PROJECT_DIR$/app/src/main/java/com/mauri/appscannertokens/TradingScannerService.kt" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/app/src/main/java/com/mauri/appscannertokens/PositionManager.kt" beforeDir="false" afterPath="$PROJECT_DIR$/app/src/main/java/com/mauri/appscannertokens/PositionManager.kt" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/app/src/main/java/com/mauri/appscannertokens/UserConfig.kt" beforeDir="false" afterPath="$PROJECT_DIR$/app/src/main/java/com/mauri/appscannertokens/UserConfig.kt" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -21,7 +22,7 @@
   <component name="ClangdSettings">
     <option name="formatViaClangd" value="false" />
   </component>
-  <component name="ExecutionTargetManager" SELECTED_TARGET="device_and_snapshot_combo_box_target[PhysicalDevice::serial=R5CW81L938R]" />
+  <component name="ExecutionTargetManager" SELECTED_TARGET="device_and_snapshot_combo_box_target[LocalEmulator::path=C:\Users\yomau\.android\avd\Medium_Phone.avd]" />
   <component name="ExternalProjectsData">
     <projectState path="$PROJECT_DIR$">
       <ProjectState />
@@ -503,7 +504,15 @@
       <option name="project" value="LOCAL" />
       <updated>1776148015211</updated>
     </task>
-    <option name="localTasksCounter" value="33" />
+    <task id="LOCAL-00033" summary="Version 3.0 Funcionando">
+      <option name="closed" value="true" />
+      <created>1776149080074</created>
+      <option name="number" value="00033" />
+      <option name="presentableId" value="LOCAL-00033" />
+      <option name="project" value="LOCAL" />
+      <updated>1776149080074</updated>
+    </task>
+    <option name="localTasksCounter" value="34" />
     <servers />
   </component>
   <component name="Vcs.Log.Tabs.Properties">

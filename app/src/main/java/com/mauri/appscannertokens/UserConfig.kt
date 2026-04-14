@@ -14,7 +14,8 @@ data class UserConfig(
     val apalancamiento: Int = 10,                 // Apalancamiento 10x
     val porcentajeInversion: Double = 10.0,       // 10% de la billetera por trade
     val multiplicadorTp: Double = 1.50,           // Multiplicador TP 1.50
-    val multiplicadorSl: Double = 1.0,            // Multiplicador SL 1.0
+    val multiplicadorSl: Double = 1.0,          // Multiplicador SL 1.0
+    var tipoMargen: String = "CROSSED",
 
     // ==========================================
     // VALORES POR DEFECTO: FILTROS TÉCNICOS

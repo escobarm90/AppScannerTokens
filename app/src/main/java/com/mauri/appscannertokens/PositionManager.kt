@@ -33,7 +33,7 @@ object PositionManager {
         val nuevaPosicion = ActivePosition(symbol, side, entryPrice, entryPrice, initialTp, initialTp)
         _positions.update { it + nuevaPosicion }
 
-        // Bucle de Trailing Stop Ultra Rápido
+        // Bucle de Trailing Stop Seguro (Estilo Python)
         scope.launch {
             var tpDinamico = initialTp
             var nivelTrailing = 0
@@ -41,18 +41,18 @@ object PositionManager {
             AlertManager.agregarLog("⏱️ Iniciando Trailing Expansivo para $symbol...")
 
             while (true) {
-                delay(1000) // 1 ciclo por segundo (Óptimo para Android sin baneo)
+                delay(1500) // 1.5s para no saturar la API (Anti-Baneo)
                 try {
                     val posAmt = BinanceApiManager.obtenerCantidadPosicion(config.apiKey, config.apiSecret, symbol)
                     if (posAmt == 0.0) {
                         marcarComoCerrada(symbol)
-                        AlertManager.agregarLog("✅ [FIN] Posición $symbol cerrada naturalmente.")
+                        AlertManager.agregarLog("✅ [FIN] Posición $symbol cerrada.")
                         break
                     }
 
                     val precioActual = BinanceApiManager.obtenerPrecioActual(symbol)
 
-                    // Actualizar UI en vivo
+                    // Actualizar UI
                     _positions.update { lista ->
                         lista.map { pos ->
                             if (pos.symbol == symbol) {
@@ -65,7 +65,7 @@ object PositionManager {
                         }
                     }
 
-                    // --- LÓGICA DEL 70% (EXPANSIVO) ---
+                    // --- LÓGICA DEL 70% (EXPANSIVO CON REFLEJO NINJA) ---
                     val distanciaTotal = abs(tpDinamico - entryPrice)
                     if (distanciaTotal > 0) {
                         val progreso = if (side == "LONG") {
@@ -75,10 +75,11 @@ object PositionManager {
                         }
 
                         if (progreso >= 0.70) {
-                            AlertManager.agregarLog("🔥 [TRAILING] $symbol cruzó el 70%. Intentando Nivel ${nivelTrailing + 1}...")
+                            AlertManager.agregarLog("🔥 [TRAILING] $symbol cruzó el 70%. Modificando escudos...")
 
+                            // 1. Limpieza estricta
                             BinanceApiManager.cancelarOrdenes(config.apiKey, config.apiSecret, symbol)
-                            delay(500) // Dar tiempo a Binance a limpiar
+                            delay(800) // Dar tiempo a Binance
 
                             val checkPos = BinanceApiManager.obtenerCantidadPosicion(config.apiKey, config.apiSecret, symbol)
                             if (checkPos == 0.0) {
@@ -87,17 +88,39 @@ object PositionManager {
                                 break
                             }
 
+                            // 2. Cálculos matemáticos
                             val distSl = distanciaTotal * 0.60
                             val aumentoTp = distanciaTotal * 0.30
 
                             val nuevoSl = if (side == "LONG") entryPrice + distSl else entryPrice - distSl
                             val nuevoTp = if (side == "LONG") tpDinamico + aumentoTp else tpDinamico - aumentoTp
-
                             val ladoSalida = if (side == "LONG") "SELL" else "BUY"
 
-                            // Recolocar Muros
-                            BinanceApiManager.crearOrdenStop(config.apiKey, config.apiSecret, symbol, ladoSalida, "TAKE_PROFIT_MARKET", nuevoTp)
-                            BinanceApiManager.crearOrdenStop(config.apiKey, config.apiSecret, symbol, ladoSalida, "STOP_MARKET", nuevoSl)
+                            // 3. REFLEJO NINJA: Verificar si el precio ya rompió los nuevos límites mientras cancelábamos
+                            val precioSeguro = BinanceApiManager.obtenerPrecioActual(symbol)
+                            var mercadoCruzado = false
+
+                            if (side == "LONG" && (precioSeguro <= nuevoSl || precioSeguro >= nuevoTp)) mercadoCruzado = true
+                            if (side == "SHORT" && (precioSeguro >= nuevoSl || precioSeguro <= nuevoTp)) mercadoCruzado = true
+
+                            if (mercadoCruzado) {
+                                AlertManager.agregarLog("⚡ [REFLEJO NINJA] Volatilidad extrema. Cerrando a MARKET para asegurar ganancia.")
+                                BinanceApiManager.ejecutarOrden(config.apiKey, config.apiSecret, symbol, ladoSalida, "MARKET", abs(checkPos), 0.0, config.tipoMargen)
+                                marcarComoCerrada(symbol)
+                                break
+                            }
+
+                            // 4. Colocar nuevos muros
+                            val tpOk = BinanceApiManager.crearOrdenStop(config.apiKey, config.apiSecret, symbol, ladoSalida, "TAKE_PROFIT_MARKET", nuevoTp)
+                            val slOk = BinanceApiManager.crearOrdenStop(config.apiKey, config.apiSecret, symbol, ladoSalida, "STOP_MARKET", nuevoSl)
+
+                            // 5. KILL SWITCH: Si fallan los escudos, huimos.
+                            if (!tpOk || !slOk) {
+                                AlertManager.agregarLog("🚨 [KILL SWITCH] Binance rechazó los nuevos límites. Rescatando a MARKET...")
+                                BinanceApiManager.ejecutarOrden(config.apiKey, config.apiSecret, symbol, ladoSalida, "MARKET", abs(checkPos), 0.0, config.tipoMargen)
+                                marcarComoCerrada(symbol)
+                                break
+                            }
 
                             tpDinamico = nuevoTp
                             nivelTrailing++
@@ -105,16 +128,28 @@ object PositionManager {
                             _positions.update { lista ->
                                 lista.map { if (it.symbol == symbol) it.copy(dynamicTp = tpDinamico, trailingLevel = nivelTrailing) else it }
                             }
-
                             AlertManager.agregarLog("🛡️ [ÉXITO NIVEL $nivelTrailing] SL subido | TP extendido.")
                         }
                     }
                 } catch (e: Exception) {
-                    AlertManager.agregarLog("⚠️ Error en bucle de $symbol: ${e.message}")
+                    val errorStr = e.message ?: ""
+                    if (errorStr.contains("2021")) {
+                        AlertManager.agregarLog("⚠️ [AVISO] Retroceso brusco detectado. Cerrando a MARKET...")
+                        // Lanzamos orden a market por precaución
+                        val ladoSalida = if (side == "LONG") "SELL" else "BUY"
+                        val posAmt = BinanceApiManager.obtenerCantidadPosicion(config.apiKey, config.apiSecret, symbol)
+                        if (posAmt != 0.0) {
+                            BinanceApiManager.ejecutarOrden(config.apiKey, config.apiSecret, symbol, ladoSalida, "MARKET", abs(posAmt), 0.0, config.tipoMargen)
+                        }
+                        marcarComoCerrada(symbol)
+                        break
+                    } else {
+                        AlertManager.agregarLog("⚠️ Error en bucle de $symbol: $errorStr")
+                    }
                 }
             }
         }
-    }
+    } // <--- Esta es la llave que te faltaba
 
     private fun marcarComoCerrada(symbol: String) {
         _positions.update { lista ->
