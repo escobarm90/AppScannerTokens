@@ -193,14 +193,17 @@ class TradingScannerService : Service() {
                 tickers.map { it.asJsonObject }
                     .filter {
                         val s = it.get("symbol").asString
-                        // VOLUMEN_MIN_24H = 15,000,000
-                        s.endsWith("USDT") && it.get("quoteVolume").asDouble > 15000000.0
+                        // Leemos seguro como String y convertimos para evitar crasheos de Gson
+                        val quoteVol = it.get("quoteVolume").asString.toDoubleOrNull() ?: 0.0
+                        // Piso de 3M asegura que lleguemos siempre a 50 tokens
+                        s.endsWith("USDT") && !s.contains("_") && quoteVol > 15000000.0
                     }
-                    .sortedByDescending { Math.abs(it.get("priceChangePercent").asDouble) }
-                    .take(50) // TOP_VOLATILES = 50
+                    .sortedByDescending { Math.abs(it.get("priceChangePercent").asString.toDoubleOrNull() ?: 0.0) }
+                    .take(50) // Fuerza a tomar los 50 más volátiles (Ignorando stablecoins)
                     .map { it.get("symbol").asString }
             }
         } catch (e: Exception) {
+            Log.e("ScannerDebug", "Error obteniendo pares: ${e.message}")
             listOf("BTCUSDT", "ETHUSDT", "SOLUSDT")
         }
     }
@@ -272,40 +275,65 @@ class TradingScannerService : Service() {
     private fun actualizarVela(symbol: String, o: Double, h: Double, l: Double, c: Double, v: Double, t: Long, d: Duration) {
         val tData = marketData[symbol] ?: return
         val time = ZonedDateTime.ofInstant(Instant.ofEpochMilli(t), ZoneId.of("UTC"))
-        val bar = BaseBar(d, time, DecimalNum.valueOf(o.toString()), DecimalNum.valueOf(h.toString()), DecimalNum.valueOf(l.toString()), DecimalNum.valueOf(c.toString()), DecimalNum.valueOf(v.toString()), DecimalNum.valueOf("0.0"))
-        try {
-            if (tData.series.barCount == 0) return
-            if (time.isEqual(tData.series.lastBar.endTime)) tData.series.addBar(bar, true)
-            else if (time.isAfter(tData.series.lastBar.endTime)) tData.series.addBar(bar)
-        } catch (e: Exception) { }
+
+        // BLOQUEO CRÍTICO: El escáner espera a que el WebSocket termine de escribir
+        synchronized(tData) {
+            try {
+                // Eliminamos la notación científica nativamente
+                val bar = BaseBar(d, time,
+                    DecimalNum.valueOf(java.math.BigDecimal.valueOf(o).toPlainString()),
+                    DecimalNum.valueOf(java.math.BigDecimal.valueOf(h).toPlainString()),
+                    DecimalNum.valueOf(java.math.BigDecimal.valueOf(l).toPlainString()),
+                    DecimalNum.valueOf(java.math.BigDecimal.valueOf(c).toPlainString()),
+                    DecimalNum.valueOf(java.math.BigDecimal.valueOf(v).toPlainString()),
+                    DecimalNum.valueOf("0.0")
+                )
+                if (tData.series.barCount == 0) return
+                if (time.isEqual(tData.series.lastBar.endTime)) tData.series.addBar(bar, true)
+                else if (time.isAfter(tData.series.lastBar.endTime)) tData.series.addBar(bar)
+            } catch (e: Exception) { }
+        }
     }
 
     // =========================================================================
     // LÓGICA DE ESTRATEGIA (REPLICA DE main.py)
     // =========================================================================
     private fun evaluateStrategy(symbol: String, tData: TokenData) {
-        val idx = tData.series.endIndex
-        val prev = idx - 1
-        val ante = idx - 2
+        val idx: Int; val prev: Int; val ante: Int
+        val closeActual: Double; val closeCerrada: Double; val closePrevia: Double
+        val rsiActual: Double; val adxActual: Double; val atrActual: Double
+        val ema7Actual: Double; val ema7Previa: Double; val ema200Actual: Double
+        val volCerrado: Double; val volSma: Double
+        val macdHistAct: Double; val macdHistPrev: Double
+        val bbUpperActual: Double; val bbLowerActual: Double
 
-        val closeActual = tData.closePrice.getValue(idx).doubleValue()
-        val closeCerrada = tData.closePrice.getValue(prev).doubleValue()
-        val closePrevia = tData.closePrice.getValue(ante).doubleValue()
+        // BLOQUEO CRÍTICO: Tomamos una "foto" de la matemática sin que el WebSocket nos interrumpa
+        synchronized(tData) {
+            idx = tData.series.endIndex
+            prev = idx - 1
+            ante = idx - 2
 
-        val rsiActual = tData.rsi.getValue(prev).doubleValue()
-        val adxActual = tData.adx.getValue(prev).doubleValue()
-        val atrActual = tData.atr.getValue(idx).doubleValue()
-        val ema7Actual = tData.ema7.getValue(prev).doubleValue()
-        val ema7Previa = tData.ema7.getValue(ante).doubleValue()
-        val ema200Actual = tData.ema200.getValue(prev).doubleValue()
+            if (ante < 0) return // Seguridad extra
 
-        val volCerrado = tData.volumeInd.getValue(prev).doubleValue()
-        val volSma = tData.volSma.getValue(prev).doubleValue()
+            closeActual = tData.closePrice.getValue(idx).doubleValue()
+            closeCerrada = tData.closePrice.getValue(prev).doubleValue()
+            closePrevia = tData.closePrice.getValue(ante).doubleValue()
 
-        val macdHistAct = tData.macdLine.getValue(prev).doubleValue() - tData.macdSignal.getValue(prev).doubleValue()
-        val macdHistPrev = tData.macdLine.getValue(ante).doubleValue() - tData.macdSignal.getValue(ante).doubleValue()
-        val bbUpperActual = tData.bbUpper.getValue(prev).doubleValue()
-        val bbLowerActual = tData.bbLower.getValue(prev).doubleValue()
+            rsiActual = tData.rsi.getValue(prev).doubleValue()
+            adxActual = tData.adx.getValue(prev).doubleValue()
+            atrActual = tData.atr.getValue(idx).doubleValue()
+            ema7Actual = tData.ema7.getValue(prev).doubleValue()
+            ema7Previa = tData.ema7.getValue(ante).doubleValue()
+            ema200Actual = tData.ema200.getValue(prev).doubleValue()
+
+            volCerrado = tData.volumeInd.getValue(prev).doubleValue()
+            volSma = tData.volSma.getValue(prev).doubleValue()
+
+            macdHistAct = tData.macdLine.getValue(prev).doubleValue() - tData.macdSignal.getValue(prev).doubleValue()
+            macdHistPrev = tData.macdLine.getValue(ante).doubleValue() - tData.macdSignal.getValue(ante).doubleValue()
+            bbUpperActual = tData.bbUpper.getValue(prev).doubleValue()
+            bbLowerActual = tData.bbLower.getValue(prev).doubleValue()
+        }
 
         val atrPct = if (closeActual > 0) (atrActual / closeActual * 100) else 0.0
         val spread = spreadCache[symbol] ?: 0.0

@@ -24,6 +24,30 @@ object BinanceApiManager {
         return mac.doFinal(data.toByteArray()).joinToString("") { "%02x".format(it) }
     }
 
+    // --- NUEVO: Extrae la precisión exacta de Binance (Igual que en Python) ---
+    // --- NUEVO: Extrae la precisión exacta de Binance (Igual que en Python) ---
+    suspend fun obtenerPrecisiones(symbol: String): Pair<Int, Int> = withContext(Dispatchers.IO) {
+        try {
+            val req = Request.Builder().url("https://fapi.binance.com/fapi/v1/exchangeInfo").get().build()
+            client.newCall(req).execute().use { res ->
+                if (res.isSuccessful) {
+                    val body = res.body?.string() ?: return@withContext Pair(3, 4)
+                    val json = JsonParser.parseString(body).asJsonObject
+                    val symbols = json.getAsJsonArray("symbols")
+                    for (i in 0 until symbols.size()) {
+                        val symObj = symbols.get(i).asJsonObject
+                        if (symObj.get("symbol").asString == symbol) {
+                            val qtyPrec = symObj.get("quantityPrecision").asInt
+                            val pricePrec = symObj.get("pricePrecision").asInt
+                            return@withContext Pair(qtyPrec, pricePrec)
+                        }
+                    }
+                }
+            }
+        } catch (e: Exception) { Log.e("BinanceAPI", "Error precision: ${e.message}") }
+        return@withContext Pair(3, 4) // Fallback de seguridad
+    }
+
     // 1. Consultar Saldo Real de USDT
     suspend fun obtenerSaldoUSDT(apiKey: String, apiSecret: String): Double = withContext(Dispatchers.IO) {
         if (apiKey.isEmpty() || apiSecret.isEmpty()) return@withContext 0.0
@@ -110,30 +134,18 @@ object BinanceApiManager {
 
             val ts2 = System.currentTimeMillis()
 
-            // --- NUEVO ARREGLO: Redondeo Dinámico (Evita error de Precision) ---
-            val scaleQty = when {
-                quantity >= 1000 -> 0   // Monedas baratas: Cantidades enteras
-                quantity >= 10 -> 1
-                quantity >= 1 -> 2
-                else -> 3               // Monedas caras: Hasta 3 decimales
-            }
+            // --- NUEVO ARREGLO DE PRECISIÓN: Consultamos a Binance la precisión matemática exacta ---
+            val (qtyPrec, pricePrec) = obtenerPrecisiones(symbol)
 
-            val scalePrice = when {
-                price >= 1000 -> 2      // BTC/ETH
-                price >= 10 -> 3        // SOL/AVAX
-                price >= 1 -> 4         // ADA/XRP
-                price >= 0.1 -> 5       // DOGE
-                else -> 7               // SHIB/PEPE
-            }
-
+            // Formateamos la cantidad y el precio obligando a respetar el límite exacto del activo
             val qtyStr = BigDecimal.valueOf(quantity)
-                .setScale(scaleQty, java.math.RoundingMode.DOWN)
+                .setScale(qtyPrec, java.math.RoundingMode.DOWN)
                 .stripTrailingZeros().toPlainString()
 
             val priceStr = BigDecimal.valueOf(price)
-                .setScale(scalePrice, java.math.RoundingMode.DOWN)
+                .setScale(pricePrec, java.math.RoundingMode.DOWN)
                 .stripTrailingZeros().toPlainString()
-            // ------------------------------------------------------------------
+            // ----------------------------------------------------------------------------------------
 
             // --- ARREGLO ANTERIOR INTACTO: Orden y Firma (Evita error de Signature) ---
             // 1. Armamos la cadena base
@@ -243,19 +255,13 @@ object BinanceApiManager {
         try {
             val ts = System.currentTimeMillis()
 
-            // --- NUEVO: Redondeo Dinámico Inteligente para el TP/SL ---
-            val scalePrice = when {
-                stopPrice >= 1000 -> 2      // BTC/ETH
-                stopPrice >= 10 -> 3        // SOL/AVAX
-                stopPrice >= 1 -> 4         // ADA/XRP
-                stopPrice >= 0.1 -> 5       // DOGE
-                else -> 7                   // SHIB/PEPE
-            }
+            // --- ARREGLO APLICADO: Consultamos la precisión matemática exacta del precio ---
+            val (_, pricePrec) = obtenerPrecisiones(symbol)
 
             val priceStr = BigDecimal.valueOf(stopPrice)
-                .setScale(scalePrice, java.math.RoundingMode.DOWN)
+                .setScale(pricePrec, java.math.RoundingMode.DOWN)
                 .stripTrailingZeros().toPlainString()
-            // ----------------------------------------------------------
+            // -------------------------------------------------------------------------------
 
             val form = FormBody.Builder()
                 .add("symbol", symbol)
