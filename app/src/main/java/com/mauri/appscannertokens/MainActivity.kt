@@ -81,7 +81,10 @@ fun MonitorScreen(onOpenConfig: () -> Unit) {
         }
     }
 
-    LaunchedEffect(Unit) { actualizarSaldo() }
+    LaunchedEffect(Unit) {
+        AlertManager.inicializar(context) // <-- AGREGAR ESTA LÍNEA AQUÍ
+        actualizarSaldo()
+    }
 
     Column(modifier = Modifier.fillMaxSize().background(colorFondo).padding(top = 16.dp)) {
 
@@ -204,8 +207,7 @@ fun MonitorScreen(onOpenConfig: () -> Unit) {
                             } else {
                                 LazyColumn(modifier = Modifier.fillMaxSize()) {
                                     items(alertas) { alerta ->
-                                        AlertCard(alerta = alerta, config = config, billetera = saldoBilletera, onDismiss = { AlertManager.removerAlerta(alerta) })
-                                    }
+                                        AlertCard(alerta = alerta, config = config, billetera = saldoBilletera, onDismiss = { AlertManager.removerAlerta(context, alerta) })                                    }
                                 }
                             }
                         }

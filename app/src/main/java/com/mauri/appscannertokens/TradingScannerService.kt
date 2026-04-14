@@ -443,7 +443,7 @@ class TradingScannerService : Service() {
                 emitirLogApp("🎯 ¡OPORTUNIDAD $senal DETECTADA EN $symbol!")
 
                 val velasEst = Math.max(1, (distTp / atrActual).toInt())
-                AlertManager.agregarAlerta(AlertData(symbol, senal, closeActual, tp, sl, velasEst, config.timeframe))
+                AlertManager.agregarAlerta(this@TradingScannerService, AlertData(symbol, senal, closeActual, tp, sl, velasEst, config.timeframe))
 
             } catch (e: Exception) {
                 emitirLogApp("❌ Error API en validación final: ${e.message}")

@@ -1,5 +1,9 @@
 package com.mauri.appscannertokens
 
+import android.content.Context
+import android.media.RingtoneManager
+import com.google.gson.Gson
+import com.google.gson.reflect.TypeToken
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -17,32 +21,72 @@ data class AlertData(
 )
 
 object AlertManager {
-    // 1. Almacena las alertas en tiempo real (Tarjetas)
     private val _alertas = MutableStateFlow<List<AlertData>>(emptyList())
     val alertas: StateFlow<List<AlertData>> = _alertas.asStateFlow()
 
-    // 2. Almacena los textos de la consola CMD
     private val _logs = MutableStateFlow<List<String>>(emptyList())
     val logs: StateFlow<List<String>> = _logs.asStateFlow()
 
-    fun agregarAlerta(alerta: AlertData) {
-        _alertas.update { actual ->
-            val nuevaLista = actual.toMutableList()
-            nuevaLista.add(0, alerta)
-            if (nuevaLista.size > 20) nuevaLista.take(20) else nuevaLista
+    private val gson = Gson()
+    private const val PREFS_NAME = "AppScannerAlerts"
+    private const val KEY_ALERTAS = "alertas_guardadas"
+
+    // NUEVO: Carga el historial al abrir la app
+    fun inicializar(context: Context) {
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val json = prefs.getString(KEY_ALERTAS, null)
+        if (json != null) {
+            val type = object : TypeToken<List<AlertData>>() {}.type
+            val guardadas: List<AlertData> = gson.fromJson(json, type)
+            _alertas.value = guardadas
         }
     }
 
-    fun removerAlerta(alerta: AlertData) {
-        _alertas.update { actual -> actual.filter { it != alerta } }
+    // NUEVO: Requiere Context para guardar y sonar
+    fun agregarAlerta(context: Context, alerta: AlertData) {
+        _alertas.update { actual ->
+            val nuevaLista = actual.toMutableList()
+            nuevaLista.add(0, alerta)
+
+            // LÍMITE ESTRICTO DE 5 TARJETAS (Se pisan las antiguas)
+            val listaLimitada = if (nuevaLista.size > 5) nuevaLista.take(5) else nuevaLista
+
+            // Guardamos en memoria física
+            guardarEnMemoria(context, listaLimitada)
+
+            listaLimitada
+        }
+        reproducirSonido(context)
+    }
+
+    fun removerAlerta(context: Context, alerta: AlertData) {
+        _alertas.update { actual ->
+            val nuevaLista = actual.filter { it != alerta }
+            guardarEnMemoria(context, nuevaLista)
+            nuevaLista
+        }
+    }
+
+    private fun guardarEnMemoria(context: Context, lista: List<AlertData>) {
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        prefs.edit().putString(KEY_ALERTAS, gson.toJson(lista)).apply()
+    }
+
+    private fun reproducirSonido(context: Context) {
+        try {
+            // Reproduce el sonido de notificación predeterminado de tu S23 Ultra
+            val uri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
+            val ringtone = RingtoneManager.getRingtone(context, uri)
+            ringtone.play()
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
     }
 
     fun agregarLog(mensaje: String) {
         _logs.update { actual ->
             val nuevaLista = actual.toMutableList()
-            // Agregamos arriba para que Compose lo dibuje desde abajo hacia arriba (Efecto Terminal)
             nuevaLista.add(0, mensaje)
-            // Mantenemos solo los últimos 100 mensajes para no consumir RAM
             if (nuevaLista.size > 100) nuevaLista.take(100) else nuevaLista
         }
     }
