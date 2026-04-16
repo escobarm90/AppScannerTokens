@@ -445,6 +445,11 @@ class TradingScannerService : Service() {
                 val velasEst = Math.max(1, (distTp / atrActual).toInt())
                 AlertManager.agregarAlerta(this@TradingScannerService, AlertData(symbol, senal, closeActual, tp, sl, velasEst, config.timeframe))
 
+                AlertManager.agregarAlerta(
+                    this@TradingScannerService,
+                    AlertData(symbol, senal, closeActual, tp, sl, velasEst, config.timeframe)
+                )
+
             } catch (e: Exception) {
                 emitirLogApp("❌ Error API en validación final: ${e.message}")
             }
@@ -464,6 +469,17 @@ class TradingScannerService : Service() {
             manager.createNotificationChannel(channel)
         }
     }
+
+    data class AlertData(
+        val symbol: String,
+        val senal: String,
+        val precio: Double,      // Cambiado para coincidir con la UI
+        val tp: Double,          // Cambiado para coincidir con la UI
+        val sl: Double,          // Cambiado para coincidir con la UI
+        val velasEstimadas: Int,
+        val timeframe: String,
+        val timestamp: Long = System.currentTimeMillis() // Agregado para la hora
+    )
 
     override fun onDestroy() { isRunning = false; webSocket?.close(1000, "Stop"); super.onDestroy() }
     override fun onBind(intent: Intent?): IBinder? = null

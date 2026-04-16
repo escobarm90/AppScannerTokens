@@ -1,7 +1,6 @@
 package com.mauri.appscannertokens
 
 import android.content.Context
-import android.content.Intent
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -28,22 +27,72 @@ import com.google.gson.Gson
 import kotlinx.coroutines.launch
 import java.util.Locale
 import kotlin.math.abs
+import android.content.Intent
+import android.net.Uri
+import android.os.Build
+import android.os.PowerManager
+import android.provider.Settings
+import androidx.activity.result.contract.ActivityResultContracts
 
 class MainActivity : ComponentActivity() {
+
+    // --- REGISTRADOR PARA EL PERMISO DE NOTIFICACIONES ---
+    private val requestPermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { isGranted: Boolean ->
+        if (!isGranted) {
+            AlertManager.agregarLog("⚠️ Permiso de notificaciones denegado.")
+        }
+    }
+
+    // --- FUNCIÓN PARA BLINDAR LA APP EN SEGUNDO PLANO ---
+    private fun solicitarPermisosCriticos() {
+        // 1. Pedir permiso de Notificaciones (Requerido en Android 13+)
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+            if (checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                requestPermissionLauncher.launch(android.Manifest.permission.POST_NOTIFICATIONS)
+            }
+        }
+
+        // 2. Pedir exención de Ahorro de Batería (Evita el Doze Mode)
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
+            val powerManager = getSystemService(POWER_SERVICE) as android.os.PowerManager
+            if (!powerManager.isIgnoringBatteryOptimizations(packageName)) {
+                val intent = android.content.Intent(android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
+                    data = android.net.Uri.parse("package:$packageName")
+                }
+                startActivity(intent)
+            }
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
+        // Disparamos la solicitud de permisos críticos al abrir la app
+        solicitarPermisosCriticos()
+
         setContent {
             MaterialTheme {
-                MonitorScreen(onOpenConfig = { startActivity(Intent(this, ConfigActivity::class.java)) })
+                // Inicializamos la memoria, el caché de posiciones y los WebSockets apenas carga la UI
+                androidx.compose.runtime.LaunchedEffect(Unit) {
+                    AlertManager.inicializar(this@MainActivity)
+                    BinanceApiManager.iniciarWsTickers()
+                    PositionManager.inicializar(this@MainActivity)
+                }
+
+                MonitorScreen(onOpenConfig = {
+                    startActivity(android.content.Intent(this@MainActivity, ConfigActivity::class.java))
+                })
             }
         }
     }
 }
 
-fun cargarConfiguracion(context: Context): UserConfig {
-    val prefs = context.getSharedPreferences("AppScannerConfig", Context.MODE_PRIVATE)
+fun cargarConfiguracion(context: android.content.Context): UserConfig {
+    val prefs = context.getSharedPreferences("AppScannerConfig", android.content.Context.MODE_PRIVATE)
     val jsonGuardado = prefs.getString("config_data", null)
-    return if (jsonGuardado != null) Gson().fromJson(jsonGuardado, UserConfig::class.java) else UserConfig()
+    return if (jsonGuardado != null) com.google.gson.Gson().fromJson(jsonGuardado, UserConfig::class.java) else UserConfig()
 }
 
 @Composable
@@ -82,7 +131,9 @@ fun MonitorScreen(onOpenConfig: () -> Unit) {
     }
 
     LaunchedEffect(Unit) {
-        AlertManager.inicializar(context) // <-- AGREGAR ESTA LÍNEA AQUÍ
+        AlertManager.inicializar(context)
+        BinanceApiManager.iniciarWsTickers() // Prende la ametralladora de precios
+        PositionManager.inicializar(context) // Resucita posiciones huérfanas
         actualizarSaldo()
     }
 

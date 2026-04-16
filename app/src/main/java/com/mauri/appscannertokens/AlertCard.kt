@@ -20,7 +20,7 @@ import java.util.*
 
 @Composable
 fun AlertCard(
-    alerta: AlertData,
+    alerta: TradingScannerService.AlertData,
     config: UserConfig,
     billetera: Double,
     onDismiss: () -> Unit
@@ -43,9 +43,27 @@ fun AlertCard(
     val formatter = SimpleDateFormat("HH:mm:ss", Locale.getDefault())
     val horaStr = formatter.format(Date(alerta.timestamp))
 
-    val margenCalculado = if (billetera > 0) billetera * (porcentajeUsado / 100.0) else 0.0
-    val nominalCalculado = margenCalculado * config.apalancamiento
+    val margenDeseado = if (billetera > 0) billetera * (porcentajeUsado / 100.0) else 0.0
+    var nominalCalculado = margenDeseado * config.apalancamiento
     val distanciaTpPct = if (alerta.precio > 0) kotlin.math.abs(alerta.tp - alerta.precio) / alerta.precio else 0.0
+    val distSlAbsoluta = kotlin.math.abs(alerta.sl - alerta.precio)
+
+    var margenRealUsar = margenDeseado
+    var isRiesgoAlto = false
+
+    // --- REPLICA EXACTA DEL SCRIPT DE PYTHON: Blindaje del 4% ---
+    if (distSlAbsoluta > 0 && alerta.precio > 0 && billetera > 0) {
+        val cantidadTokensTest = nominalCalculado / alerta.precio
+        val perdidaPotencial = distSlAbsoluta * cantidadTokensTest
+        val riesgoMaximoPermitido = billetera * 0.04 // Límite máximo: 4% de la cuenta
+
+        if (perdidaPotencial > riesgoMaximoPermitido) {
+            val cantidadSegura = riesgoMaximoPermitido / distSlAbsoluta
+            nominalCalculado = cantidadSegura * alerta.precio
+            margenRealUsar = nominalCalculado / config.apalancamiento
+            isRiesgoAlto = true // Disparamos alerta visual
+        }
+    }
     val pnlBrutoCalculado = nominalCalculado * distanciaTpPct
     val roeCalculado = distanciaTpPct * config.apalancamiento * 100.0
 
@@ -128,7 +146,7 @@ fun AlertCard(
                 }
             }
 
-// --- BOTONES COMPRA/VENTA (CON INICIO DE TRAILING) ---
+            // --- BOTONES COMPRA/VENTA (CON INICIO DE TRAILING) ---
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 val side = if (alerta.senal == "LONG") "BUY" else "SELL"
                 val cantidadMonedas = if (alerta.precio > 0) nominalCalculado / alerta.precio else 0.0
@@ -141,13 +159,16 @@ fun AlertCard(
                         }
                         isEjecutando = true
                         coroutineScope.launch {
-                            // Extraemos el orderId de la nueva función Triple
-                            val (exito, msj, orderId) = BinanceApiManager.ejecutarOrden(config.apiKey, config.apiSecret, alerta.symbol, side, "LIMIT", cantidadMonedas, alerta.precio, tipoMargen)
+                            // SOLUCIÓN: Usamos variable directa en lugar de destructurar para que no falle el compilador
+                            val resultado = BinanceApiManager.ejecutarOrden(config.apiKey, config.apiSecret, alerta.symbol, side, "LIMIT", cantidadMonedas, alerta.precio, tipoMargen)
+                            val exito = resultado.first
+                            val msj = resultado.second
+                            val orderId = resultado.third
+
                             Toast.makeText(context, msj, Toast.LENGTH_LONG).show()
 
                             if (exito && orderId > 0) {
-                                // Delegamos la vigilancia y la colocación de SL/TP al PositionManager
-                                PositionManager.iniciarMonitoreo(config, alerta.symbol, alerta.senal, alerta.precio, alerta.tp, alerta.sl, config.apalancamiento, orderId)
+                                PositionManager.iniciarMonitoreo(context, config, alerta.symbol, alerta.senal, alerta.precio, alerta.tp, alerta.sl, config.apalancamiento, orderId)
                                 onDismiss()
                             }
                             isEjecutando = false
@@ -167,13 +188,16 @@ fun AlertCard(
                         }
                         isEjecutando = true
                         coroutineScope.launch {
-                            // Extraemos el orderId de la nueva función Triple
-                            val (exito, msj, orderId) = BinanceApiManager.ejecutarOrden(config.apiKey, config.apiSecret, alerta.symbol, side, "MARKET", cantidadMonedas, alerta.precio, tipoMargen)
+                            // SOLUCIÓN: Usamos variable directa en lugar de destructurar para que no falle el compilador
+                            val resultado = BinanceApiManager.ejecutarOrden(config.apiKey, config.apiSecret, alerta.symbol, side, "MARKET", cantidadMonedas, alerta.precio, tipoMargen)
+                            val exito = resultado.first
+                            val msj = resultado.second
+                            val orderId = resultado.third
+
                             Toast.makeText(context, msj, Toast.LENGTH_LONG).show()
 
                             if (exito && orderId > 0) {
-                                // Delegamos la vigilancia y la colocación de SL/TP al PositionManager
-                                PositionManager.iniciarMonitoreo(config, alerta.symbol, alerta.senal, alerta.precio, alerta.tp, alerta.sl, config.apalancamiento, orderId)
+                                PositionManager.iniciarMonitoreo(context, config, alerta.symbol, alerta.senal, alerta.precio, alerta.tp, alerta.sl, config.apalancamiento, orderId)
                                 onDismiss()
                             }
                             isEjecutando = false
@@ -197,7 +221,10 @@ fun AlertCard(
 
             // --- RESULTADOS ESTIMADOS ---
             Text("🏦 RESULTADOS ESTIMADOS", color = colorYellow, fontSize = 12.sp, fontWeight = FontWeight.Bold)
-            DataRow("Margen a Usar ($tipoMargen)", String.format(Locale.US, "$%.2f USDT", margenCalculado), Color.White)
+            if (isRiesgoAlto) {
+                Text("⚠️ RIESGO > 4%: Posición achicada automáticamente para blindar capital.", color = colorRed, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+            }
+            DataRow("Margen a Usar ($tipoMargen)", String.format(Locale.US, "$%.2f USDT", margenRealUsar), if (isRiesgoAlto) colorRed else Color.White)
             DataRow("Tamaño de Posición (Apalancado)", String.format(Locale.US, "$%.2f USDT", nominalCalculado), Color.LightGray)
 
             HorizontalDivider(modifier = Modifier.padding(vertical = 6.dp), color = colorBorde.copy(alpha = 0.5f))
