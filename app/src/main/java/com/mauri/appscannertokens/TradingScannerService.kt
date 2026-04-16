@@ -428,11 +428,33 @@ class TradingScannerService : Service() {
 
                 // 4. Cálculo exacto de SL y TP
                 var distSl = atrActual * config.multiplicadorSl
-                val topeMax = closeActual * 0.008
-                val topeMin = closeActual * 0.003
 
-                if (distSl > topeMax) distSl = topeMax
-                if (distSl < topeMin) distSl = topeMin
+                // --- NUEVO SISTEMA DE RIESGO ESTRICTO ---
+                val maxRiesgoPctBilletera = 0.05 // Tu límite de arriesgar máximo 0.05% de la billetera total
+                val riesgoMaximoUsdt = billeteraVirtualUsdt * (maxRiesgoPctBilletera / 100.0)
+
+                val margenUsdt = billeteraVirtualUsdt * (config.porcentajeInversion / 100.0)
+                val tamanoPosicionUsdt = margenUsdt * config.apalancamiento
+
+                // Calculamos cuánta distancia en el precio equivale a perder exactamente el Riesgo Máximo
+                val distSlMaxPermitida = if (tamanoPosicionUsdt > 0) {
+                    (riesgoMaximoUsdt / tamanoPosicionUsdt) * closeActual
+                } else {
+                    closeActual * 0.005 // Fallback de seguridad
+                }
+
+                // Aplicamos el tope: El SL será el ATR, pero nunca mayor al riesgo permitido
+                if (distSl > distSlMaxPermitida) {
+                    distSl = distSlMaxPermitida
+                }
+
+                // --- PROTECCIÓN CONTRA EL SPREAD ---
+                // Si el tope de riesgo queda tan pegado al precio de entrada que el spread lo tocaría al instante:
+                val spreadAbsoluto = (spread / 100.0) * closeActual
+                if (distSl <= spreadAbsoluto * 1.5) { // Damos un pequeñísimo margen vital (1.5x el spread)
+                    emitirLogApp("❌ RECHAZADO: El riesgo del 0.05% ($riesgoMaximoUsdt USDT) obliga a un SL menor al spread del mercado.")
+                    return@launch
+                }
 
                 val distTp = distSl * config.multiplicadorTp
                 val tp = if (senal == "LONG") closeActual + distTp else closeActual - distTp
@@ -441,7 +463,7 @@ class TradingScannerService : Service() {
                 // Aprobación Final
                 registroBloqueo[symbol] = System.currentTimeMillis()
                 emitirLogApp("🎯 ¡OPORTUNIDAD $senal DETECTADA EN $symbol!")
-
+             
                 val velasEst = Math.max(1, (distTp / atrActual).toInt())
                 AlertManager.agregarAlerta(this@TradingScannerService, AlertData(symbol, senal, closeActual, tp, sl, velasEst, config.timeframe))
 
