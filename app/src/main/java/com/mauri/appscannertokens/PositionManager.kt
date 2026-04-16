@@ -126,13 +126,14 @@ object PositionManager {
             var slFinal = posInicial.currentSl
             var tpFinal = posInicial.dynamicTp
 
-            if (precioActualSeguro > 0) {
-                if (senal == "LONG") {
-                    if (slFinal >= precioActualSeguro) slFinal = precioActualSeguro * 0.995
-                    if (tpFinal <= precioActualSeguro) tpFinal = precioActualSeguro * 1.005
-                } else {
-                    if (slFinal <= precioActualSeguro) slFinal = precioActualSeguro * 1.005
-                    if (tpFinal >= precioActualSeguro) tpFinal = precioActualSeguro * 0.995
+           if (precioActualSeguro > 0) {
+                // Si hubo un deslizamiento de precio severo y ya pasamos tu SL dinámico estricto,
+                // Binance lo detectará y cerrará a Market automáticamente al inyectar las órdenes Stop.
+                // Ya NO re-escribimos el SL alejándolo artificialmente. Se respeta la matemática estricta.
+                if (senal == "LONG" && slFinal >= precioActualSeguro) {
+                    AlertManager.agregarLog("⚠️ Slippage extremo detectado. El SL será ejecutado de inmediato.")
+                } else if (senal == "SHORT" && slFinal <= precioActualSeguro) {
+                    AlertManager.agregarLog("⚠️ Slippage extremo detectado. El SL será ejecutado de inmediato.")
                 }
             }
 
