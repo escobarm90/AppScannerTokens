@@ -169,7 +169,7 @@ fun AlertCard(
 
                             if (exito && orderId > 0) {
                                 PositionManager.iniciarMonitoreo(context, config, alerta.symbol, alerta.senal, alerta.precio, alerta.tp, alerta.sl, config.apalancamiento, orderId)
-                                onDismiss()
+                                // onDismiss() // COMENTADO: Para que la Card no se borre del dashboard al ejecutar la orden
                             }
                             isEjecutando = false
                         }
@@ -198,7 +198,7 @@ fun AlertCard(
 
                             if (exito && orderId > 0) {
                                 PositionManager.iniciarMonitoreo(context, config, alerta.symbol, alerta.senal, alerta.precio, alerta.tp, alerta.sl, config.apalancamiento, orderId)
-                                onDismiss()
+                                // onDismiss() // COMENTADO: Para que la Card no se borre del dashboard al ejecutar la orden
                             }
                             isEjecutando = false
                         }
@@ -219,7 +219,7 @@ fun AlertCard(
 
             HorizontalDivider(modifier = Modifier.padding(vertical = 12.dp), color = colorBorde)
 
-            // --- RESULTADOS ESTIMADOS ---
+// --- RESULTADOS ESTIMADOS ---
             Text("🏦 RESULTADOS ESTIMADOS", color = colorYellow, fontSize = 12.sp, fontWeight = FontWeight.Bold)
             if (isRiesgoAlto) {
                 Text("⚠️ RIESGO > 4%: Posición achicada automáticamente para blindar capital.", color = colorRed, fontSize = 11.sp, fontWeight = FontWeight.Bold)
@@ -229,7 +229,7 @@ fun AlertCard(
 
             HorizontalDivider(modifier = Modifier.padding(vertical = 6.dp), color = colorBorde.copy(alpha = 0.5f))
 
-            // Detalle de comisiones
+// Detalle de comisiones
             Text("💸 Gastos de Operación (Fees Binance)", color = Color.Gray, fontSize = 11.sp, fontWeight = FontWeight.Bold)
             DataRow("Fee Apertura Est. (0.05%)", String.format(Locale.US, "-$%.4f USDT", feeAperturaEst), colorRed.copy(alpha = 0.8f))
             DataRow("Fee Cierre Est. (0.05%)", String.format(Locale.US, "-$%.4f USDT", feeCierreEst), colorRed.copy(alpha = 0.8f))

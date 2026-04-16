@@ -42,9 +42,13 @@ import java.util.concurrent.ConcurrentHashMap
 // INDICADORES TÉCNICOS (REPLICA DE indicadores.py)
 // =========================================================================
 class TokenData(symbol: String) {
-    val series: BaseBarSeries = BaseBarSeriesBuilder().withName(symbol).build().apply {
-        maximumBarCount = 300 // VELAS_A_ANALIZAR
-    }
+    // 1. OBLIGAMOS A TA4J A USAR DECIMAL NUM PARA EVITAR EL CHOQUE DE TIPOS (Evita el NaN)
+    val series: BaseBarSeries = BaseBarSeriesBuilder()
+        .withName(symbol)
+        .withNumTypeOf(DecimalNum::class.java)
+        .build().apply {
+            maximumBarCount = 300
+        }
 
     val closePrice = ClosePriceIndicator(series)
     val volumeInd = VolumeIndicator(series)
@@ -212,44 +216,60 @@ class TradingScannerService : Service() {
         while (isRunning) {
             try {
                 val request = Request.Builder().url("https://fapi.binance.com/fapi/v1/ticker/bookTicker").build()
-                client.newCall(request).execute().use { response ->
-                    val body = response.body?.string() ?: return@use
+                val response = client.newCall(request).execute()
+                val body = response.body?.string() ?: ""
+                response.close() // Evitamos que .use detenga el ciclo while
+
+                if (body.startsWith("[")) {
                     val tickers = JsonParser.parseString(body).asJsonArray
-                    for (t in tickers) {
-                        val symbol = t.asJsonObject.get("symbol").asString
+                    for (i in 0 until tickers.size()) {
+                        val t = tickers.get(i).asJsonObject
+                        val symbol = t.get("symbol").asString
                         if (symbols.contains(symbol)) {
-                            val bid = t.asJsonObject.get("bidPrice").asDouble
-                            val ask = t.asJsonObject.get("askPrice").asDouble
-                            if (bid > 0) spreadCache[symbol] = ((ask - bid) / bid) * 100
+                            val bid = t.get("bidPrice").asString.toDoubleOrNull() ?: 0.0
+                            val ask = t.get("askPrice").asString.toDoubleOrNull() ?: 0.0
+                            if (bid > 0.0) {
+                                spreadCache[symbol] = ((ask - bid) / bid) * 100.0
+                            }
                         }
                     }
                 }
-            } catch (e: Exception) { }
-            delay(5000)
+            } catch (e: Exception) {
+                Log.e("ScannerDebug", "Error Spreads: ${e.message}")
+            }
+            delay(4000) // Pausa de 4s para evitar baneos de IP de Binance
         }
     }
 
+
     private fun descargarHistorial(symbol: String, timeframe: String, duration: Duration) {
         val tokenData = marketData[symbol] ?: return
-        // VELAS_A_ANALIZAR = 300
         val url = "https://fapi.binance.com/fapi/v1/klines?symbol=$symbol&interval=$timeframe&limit=300"
         val request = Request.Builder().url(url).build()
         try {
-            client.newCall(request).execute().use { response ->
-                if (!response.isSuccessful) return
-                val klines = JsonParser.parseString(response.body?.string()).asJsonArray
-                for (k in klines) {
-                    val kline = k.asJsonArray
-                    val endTime = ZonedDateTime.ofInstant(Instant.ofEpochMilli(kline.get(6).asLong), ZoneId.of("UTC"))
-                    val bar = BaseBar(duration, endTime,
-                        DecimalNum.valueOf(kline.get(1).asString), DecimalNum.valueOf(kline.get(2).asString),
-                        DecimalNum.valueOf(kline.get(3).asString), DecimalNum.valueOf(kline.get(4).asString),
-                        DecimalNum.valueOf(kline.get(5).asString), DecimalNum.valueOf("0.0")
-                    )
-                    tokenData.series.addBar(bar)
-                }
+            val response = client.newCall(request).execute()
+            val body = response.body?.string() ?: ""
+            response.close() // Cerramos manualmente en lugar de usar .use
+
+            if (!body.startsWith("[")) return
+
+            val klines = JsonParser.parseString(body).asJsonArray
+            for (i in 0 until klines.size()) {
+                val kline = klines.get(i).asJsonArray
+                val endTime = ZonedDateTime.ofInstant(Instant.ofEpochMilli(kline.get(6).asLong), ZoneId.of("UTC"))
+                val bar = BaseBar(duration, endTime,
+                    DecimalNum.valueOf(kline.get(1).asString),
+                    DecimalNum.valueOf(kline.get(2).asString),
+                    DecimalNum.valueOf(kline.get(3).asString),
+                    DecimalNum.valueOf(kline.get(4).asString),
+                    DecimalNum.valueOf(kline.get(5).asString),
+                    DecimalNum.valueOf("0")
+                )
+                tokenData.series.addBar(bar)
             }
-        } catch (e: Exception) { }
+        } catch (e: Exception) {
+            Log.e("ScannerDebug", "Error Historial $symbol: ${e.message}")
+        }
     }
 
     private fun conectarWebSocket(symbols: List<String>, duration: Duration) {
@@ -278,15 +298,13 @@ class TradingScannerService : Service() {
 
         synchronized(tData) {
             try {
-                // El formato a prueba de fallos: BigDecimal.valueOf(x).toPlainString()
-                // Evita la notación científica sin importar cuántos decimales tenga el token.
                 val bar = BaseBar(d, time,
-                    DecimalNum.valueOf(BigDecimal.valueOf(o).toPlainString()),
-                    DecimalNum.valueOf(BigDecimal.valueOf(h).toPlainString()),
-                    DecimalNum.valueOf(BigDecimal.valueOf(l).toPlainString()),
-                    DecimalNum.valueOf(BigDecimal.valueOf(c).toPlainString()),
-                    DecimalNum.valueOf(BigDecimal.valueOf(v).toPlainString()),
-                    DecimalNum.valueOf("0.0")
+                    DecimalNum.valueOf(o),
+                    DecimalNum.valueOf(h),
+                    DecimalNum.valueOf(l),
+                    DecimalNum.valueOf(c),
+                    DecimalNum.valueOf(v),
+                    DecimalNum.valueOf(0)
                 )
                 if (tData.series.barCount == 0) return
                 if (time.isEqual(tData.series.lastBar.endTime)) tData.series.addBar(bar, true)
@@ -315,13 +333,22 @@ class TradingScannerService : Service() {
 
             if (ante < 0) return
 
-            closeActual = tData.closePrice.getValue(idx).doubleValue()
+            // SOLUCIÓN AL CACHÉ ENVENENADO (ADX NaN / RSI 0.00):
+            // NUNCA consultamos un indicador en la vela viva 'idx' para no arruinar el historial.
+
+            // 1. Leemos el precio actual directamente de la vela física, saltándonos el caché
+            closeActual = tData.series.lastBar.closePrice.doubleValue()
+
+            // 2. Todos los demás indicadores los leemos estrictamente del 'prev' (vela ya cerrada)
             closeCerrada = tData.closePrice.getValue(prev).doubleValue()
             closePrevia = tData.closePrice.getValue(ante).doubleValue()
 
             rsiActual = tData.rsi.getValue(prev).doubleValue()
             adxActual = tData.adx.getValue(prev).doubleValue()
-            atrActual = tData.atr.getValue(idx).doubleValue()
+
+            // ¡EL ATR TAMBIÉN LO CAMBIAMOS A PREV! (Antes estaba en idx y causaba envenenamiento)
+            atrActual = tData.atr.getValue(prev).doubleValue()
+
             ema7Actual = tData.ema7.getValue(prev).doubleValue()
             ema7Previa = tData.ema7.getValue(ante).doubleValue()
             ema200Actual = tData.ema200.getValue(prev).doubleValue()
@@ -334,6 +361,7 @@ class TradingScannerService : Service() {
             bbUpperActual = tData.bbUpper.getValue(prev).doubleValue()
             bbLowerActual = tData.bbLower.getValue(prev).doubleValue()
         }
+
 
         val atrPct = if (closeActual > 0) (atrActual / closeActual * 100) else 0.0
         val spread = spreadCache[symbol] ?: 0.0
@@ -430,17 +458,16 @@ class TradingScannerService : Service() {
                 var distSl = atrActual * config.multiplicadorSl
 
                 // --- NUEVO SISTEMA DE RIESGO ESTRICTO ---
-                val maxRiesgoPctBilletera = 0.05 // Tu límite de arriesgar máximo 0.05% de la billetera total
+                val maxRiesgoPctBilletera = 2.0
                 val riesgoMaximoUsdt = billeteraVirtualUsdt * (maxRiesgoPctBilletera / 100.0)
 
                 val margenUsdt = billeteraVirtualUsdt * (config.porcentajeInversion / 100.0)
                 val tamanoPosicionUsdt = margenUsdt * config.apalancamiento
 
-                // Calculamos cuánta distancia en el precio equivale a perder exactamente el Riesgo Máximo
                 val distSlMaxPermitida = if (tamanoPosicionUsdt > 0) {
                     (riesgoMaximoUsdt / tamanoPosicionUsdt) * closeActual
                 } else {
-                    closeActual * 0.005 // Fallback de seguridad
+                    closeActual * 0.005
                 }
 
                 // Aplicamos el tope: El SL será el ATR, pero nunca mayor al riesgo permitido
