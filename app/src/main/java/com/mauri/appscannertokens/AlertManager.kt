@@ -28,6 +28,12 @@ object AlertManager {
     }
 
     fun agregarAlerta(context: Context, alerta: TradingScannerService.AlertData) {
+        // 1. Sincronizamos la memoria con el disco duro por si el servicio 
+        // está corriendo en segundo plano sin la interfaz abierta.
+        if (_alertas.value.isEmpty()) {
+            inicializar(context)
+        }
+
         _alertas.update { actual ->
             // Filtramos para que no se duplique la misma señal al mismo tiempo
             if (actual.isNotEmpty() && actual[0].symbol == alerta.symbol && actual[0].senal == alerta.senal) {
@@ -37,11 +43,15 @@ object AlertManager {
             val nuevaLista = actual.toMutableList()
             nuevaLista.add(0, alerta)
 
-            // Límite estricto de 5 tarjetas
+            // Límite estricto de 5 tarjetas en el historial
             val tope = if (nuevaLista.size > 5) nuevaLista.take(5) else nuevaLista
 
-            // Guardado físico en el teléfono
-            context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putString("lista", gson.toJson(tope)).apply()
+            // Guardado físico en el teléfono, ahora respetando las alertas preexistentes
+            context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+                .edit()
+                .putString("lista", gson.toJson(tope))
+                .apply()
+                
             tope
         }
 
@@ -51,7 +61,7 @@ object AlertManager {
             RingtoneManager.getRingtone(context, uri).play()
         } catch (e: Exception) {}
     }
-
+    
     fun removerAlerta(context: Context, alerta: TradingScannerService.AlertData) {
         _alertas.update { actual ->
             val nueva = actual.filter { it != alerta }
