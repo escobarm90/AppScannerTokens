@@ -414,13 +414,21 @@ class TradingScannerService : Service() {
             return
         }
 
-        // VERIFICACIÓN DE MUROS Y TRADES
+// VERIFICACIÓN DE MUROS Y TRADES
         CoroutineScope(Dispatchers.IO).launch {
             try {
+                emitirLogApp("🔍 Validando Fuerza y Orderbook para $symbol...")
+
                 // 1. Verificar Orderbook (Muros Limit)
                 val obUrl = "https://fapi.binance.com/fapi/v1/depth?symbol=$symbol&limit=5"
-                val obResp = client.newCall(Request.Builder().url(obUrl).build()).execute().body?.string() ?: return@launch
-                if (!obResp.startsWith("{")) return@launch
+                val obReq = client.newCall(Request.Builder().url(obUrl).build()).execute()
+                val obResp = obReq.body?.string() ?: ""
+                obReq.close() // Cerramos la conexión correctamente
+
+                if (!obResp.startsWith("{")) {
+                    emitirLogApp("⚠️ API ERROR: No se pudo leer Orderbook de $symbol (Posible bloqueo de red). Abortando.")
+                    return@launch
+                }
 
                 val ob = JsonParser.parseString(obResp).asJsonObject
                 var bidQty = 0.0; var askQty = 0.0
@@ -432,8 +440,14 @@ class TradingScannerService : Service() {
 
                 // 2. Verificar Flujo de Trades Reales
                 val trUrl = "https://fapi.binance.com/fapi/v1/trades?symbol=$symbol&limit=500"
-                val trResp = client.newCall(Request.Builder().url(trUrl).build()).execute().body?.string() ?: return@launch
-                if (!trResp.startsWith("[")) return@launch
+                val trReq = client.newCall(Request.Builder().url(trUrl).build()).execute()
+                val trResp = trReq.body?.string() ?: ""
+                trReq.close()
+
+                if (!trResp.startsWith("[")) {
+                    emitirLogApp("⚠️ API ERROR: No se pudo leer el flujo de trades de $symbol.")
+                    return@launch
+                }
 
                 val trJson = JsonParser.parseString(trResp).asJsonArray
                 var volTotal = 0.0; var volCompras = 0.0
@@ -452,39 +466,31 @@ class TradingScannerService : Service() {
 
                 // 3. Sistema de Cooldown
                 val last = registroBloqueo[symbol] ?: 0L
-                if (System.currentTimeMillis() - last < 300000) { emitirLogApp("⏳ ESTADO: IGNORADO - COOLDOWN"); return@launch }
+                if (System.currentTimeMillis() - last < 300000) {
+                    emitirLogApp("⏳ ESTADO: IGNORADO - COOLDOWN (Esperando ${(300000 - (System.currentTimeMillis() - last))/1000}s)")
+                    return@launch
+                }
 
                 // 4. Cálculo exacto de SL y TP
                 var distSl = atrActual * config.multiplicadorSl
 
-                // Si el ATR falla matemáticamente, damos una distancia fija de seguridad
-                if (distSl.isNaN() || distSl <= 0.0) {
-                    distSl = closeActual * 0.01
-                }
-
-                // --- SISTEMA DE RIESGO CORREGIDO ---
-                val maxRiesgoPctBilletera = 2.0 // SUBIDO A 2.0% para dar respiro matemático
+                val maxRiesgoPctBilletera = 2.0
                 val riesgoMaximoUsdt = billeteraVirtualUsdt * (maxRiesgoPctBilletera / 100.0)
-
                 val margenUsdt = billeteraVirtualUsdt * (config.porcentajeInversion / 100.0)
                 val tamanoPosicionUsdt = margenUsdt * config.apalancamiento
 
                 val distSlMaxPermitida = if (tamanoPosicionUsdt > 0) {
                     (riesgoMaximoUsdt / tamanoPosicionUsdt) * closeActual
                 } else {
-                    closeActual * 0.02
+                    closeActual * 0.005
                 }
 
-                if (distSl > distSlMaxPermitida) {
-                    distSl = distSlMaxPermitida
-                }
+                if (distSl > distSlMaxPermitida) distSl = distSlMaxPermitida
 
-                // *** REGLA VITAL DE SUPERVIVENCIA ***
-                // El SL JAMÁS puede estar a menos del 0.4% del precio actual.
-                // Si está más cerca, Binance tirará error "Order would immediately trigger" o el spread lo cerrará.
-                val distanciaMinimaAbsoluta = closeActual * 0.004
-                if (distSl < distanciaMinimaAbsoluta) {
-                    distSl = distanciaMinimaAbsoluta
+                val spreadAbsoluto = (spread / 100.0) * closeActual
+                if (distSl <= spreadAbsoluto * 1.5) {
+                    emitirLogApp("❌ RECHAZADO: SL ($distSl) es menor al spread crítico ($spreadAbsoluto). Riesgo matemático de cierre instantáneo.")
+                    return@launch
                 }
 
                 val distTp = distSl * config.multiplicadorTp
@@ -494,10 +500,10 @@ class TradingScannerService : Service() {
                 // Aprobación Final
                 registroBloqueo[symbol] = System.currentTimeMillis()
                 emitirLogApp("🎯 ¡OPORTUNIDAD $senal DETECTADA EN $symbol!")
-             
-                val velasEst = Math.max(1, (distTp / atrActual).toInt())
-                AlertManager.agregarAlerta(this@TradingScannerService, AlertData(symbol, senal, closeActual, tp, sl, velasEst, config.timeframe))
 
+                val velasEst = Math.max(1, (distTp / atrActual).toInt())
+
+                // NOTA: Eliminé un duplicado que tenías de esta línea para optimizar
                 AlertManager.agregarAlerta(
                     this@TradingScannerService,
                     AlertData(symbol, senal, closeActual, tp, sl, velasEst, config.timeframe)

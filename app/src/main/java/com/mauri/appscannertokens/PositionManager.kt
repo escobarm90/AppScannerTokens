@@ -96,6 +96,7 @@ object PositionManager {
         val ladoSalida = if (senal == "LONG") "SELL" else "BUY"
 
         var tpDinamico = posInicial.dynamicTp
+        var slDinamico = posInicial.currentSl
         var nivelTrailing = posInicial.trailingLevel
         val entryPrice = posInicial.entryPrice
 
@@ -123,59 +124,48 @@ object PositionManager {
 
             val precioActualSeguro = BinanceApiManager.obtenerPrecioActual(symbol)
 
-            // 1. RESCATAMOS LAS DISTANCIAS ORIGINALES (La amplitud del escudo)
-            val distSlOriginal = abs(posInicial.entryPrice - posInicial.currentSl)
-            val distTpOriginal = abs(posInicial.dynamicTp - posInicial.entryPrice)
+            // 1. RESCATAMOS LAS DISTANCIAS ORIGINALES
+            val distSlOriginal = kotlin.math.abs(posInicial.entryPrice - posInicial.currentSl)
+            val distTpOriginal = kotlin.math.abs(posInicial.dynamicTp - posInicial.entryPrice)
 
-            // 2. RECALCULAMOS BASADO EN EL PRECIO REAL DE EJECUCIÓN (No el de la alerta vieja)
+            // 2. RECALCULAMOS BASADO EN EL PRECIO REAL DE EJECUCIÓN
             var slFinal = if (senal == "LONG") precioActualSeguro - distSlOriginal else precioActualSeguro + distSlOriginal
             var tpFinal = if (senal == "LONG") precioActualSeguro + distTpOriginal else precioActualSeguro - distTpOriginal
 
-            // 3. BLINDAJE ANTI-RECHAZO DE BINANCE (Mínimo 0.4% de distancia vital)
-            // Si el SL quedó pegado por culpa del spread o riesgo microscópico, lo empujamos
+            // 3. BLINDAJE ANTI-RECHAZO DE BINANCE (Mínimo 0.4%)
             val distMinimaVital = precioActualSeguro * 0.004
-
-            if (abs(precioActualSeguro - slFinal) < distMinimaVital) {
+            if (kotlin.math.abs(precioActualSeguro - slFinal) < distMinimaVital) {
                 slFinal = if (senal == "LONG") precioActualSeguro - distMinimaVital else precioActualSeguro + distMinimaVital
             }
-            if (abs(tpFinal - precioActualSeguro) < distMinimaVital) {
+            if (kotlin.math.abs(tpFinal - precioActualSeguro) < distMinimaVital) {
                 tpFinal = if (senal == "LONG") precioActualSeguro + distMinimaVital else precioActualSeguro - distMinimaVital
             }
 
-            // 4. IMPRESIÓN POR CONSOLA (Listada una abajo de otra como pediste)
             AlertManager.agregarLog(
-                "🛡️ RECALCULO DE ESCUDOS EN EJECUCIÓN:\n" +
+                "🛡️ INTENTO DE COLOCAR ESCUDOS FÍSICOS:\n" +
                         "Símbolo: $symbol\n" +
-                        "Precio Alerta Antigua: ${posInicial.entryPrice}\n" +
-                        "Precio Real Ejecución: $precioActualSeguro\n" +
-                        "Distancia SL Original: $distSlOriginal\n" +
-                        "SL Final Aplicado: $slFinal\n" +
-                        "TP Final Aplicado: $tpFinal"
+                        "Lado Salida: $ladoSalida\n" +
+                        "SL Calculado: $slFinal\n" +
+                        "TP Calculado: $tpFinal"
             )
 
-            // 5. COLOCAMOS LAS ÓRDENES (Ahora sí, matemáticamente válidas para Binance)
             val tpOk = BinanceApiManager.crearOrdenStop(config.apiKey, config.apiSecret, symbol, ladoSalida, "TAKE_PROFIT_MARKET", tpFinal)
             val slOk = BinanceApiManager.crearOrdenStop(config.apiKey, config.apiSecret, symbol, ladoSalida, "STOP_MARKET", slFinal)
 
+            // ✅ SOLUCIÓN DEFINITIVA: APAGAMOS EL KILL SWITCH DE RESCATE
             if (!tpOk || !slOk) {
-                AlertManager.agregarLog("🚨 [KILL SWITCH] Binance rechazó los escudos. Abortando...")
-                var posAmt = BinanceApiManager.obtenerCantidadPosicion(config.apiKey, config.apiSecret, symbol)
-                var reintentos = 0
-                while (posAmt == null && reintentos < 5) {
-                    delay(1000)
-                    posAmt = BinanceApiManager.obtenerCantidadPosicion(config.apiKey, config.apiSecret, symbol)
-                    reintentos++
-                }
-                val cantidadReal = posAmt ?: 0.0
-                if (cantidadReal != 0.0) {
-                    BinanceApiManager.ejecutarOrden(config.apiKey, config.apiSecret, symbol, ladoSalida, "MARKET", abs(cantidadReal), 0.0, config.tipoMargen)
-                    AlertManager.agregarLog("✅ Rescate ejecutado a Market.")
-                }
-                marcarComoCerrada(context, symbol)
-                return
+                AlertManager.agregarLog(
+                    "⚠️ RECHAZO DE BINANCE DETECTADO:\n" +
+                            "Motivo: Slippage extremo invalidó la orden física.\n" +
+                            "Acción: Posición MANTENIDA ABIERTA.\n" +
+                            "Protección: Activando Escudo VIRTUAL en RAM."
+                )
+            } else {
+                AlertManager.agregarLog("✅ Escudos físicos aceptados en Binance.")
             }
 
             tpDinamico = tpFinal
+            slDinamico = slFinal
             _positions.update { l -> l.map { if (it.symbol == symbol) it.copy(dynamicTp = tpFinal, currentSl = slFinal) else it } }
             guardarEstado(context)
         }
@@ -188,9 +178,8 @@ object PositionManager {
         var ultimoMontoPosicion = 0.0
 
         while (true) {
-            delay(300) // ⚡ LOOP HIPER RÁPIDO EN RAM (Costo 0)
+            delay(300)
             try {
-                // 1. API PESADA SOLO CADA 2.5 SEGUNDOS (Igual que Python)
                 if (System.currentTimeMillis() - ultimoChequeoApi > 2500) {
                     val posAmt = BinanceApiManager.obtenerCantidadPosicion(config.apiKey, config.apiSecret, symbol)
                     if (posAmt != null) {
@@ -204,25 +193,43 @@ object PositionManager {
                     }
                 }
 
-                // 2. LECTURA DE WEBSOCKETS (CACHÉ INSTANTÁNEA)
                 val precioActual = BinanceApiManager.preciosWs[symbol]
-                if (precioActual == null) continue // Si WS no mandó el precio aún, no hacemos cálculos
+                if (precioActual == null) continue
 
                 // 3. ACTUALIZAR UI EN VIVO
                 _positions.update { lista ->
                     lista.map { pos ->
                         if (pos.symbol == symbol) {
                             val dist = if (senal == "LONG") precioActual - pos.entryPrice else pos.entryPrice - precioActual
-                            val margenEstimado = (pos.entryPrice * abs(ultimoMontoPosicion)) / apalancamiento
-                            val pnl = dist * abs(ultimoMontoPosicion)
+                            val margenEstimado = (pos.entryPrice * kotlin.math.abs(ultimoMontoPosicion)) / apalancamiento
+                            val pnl = dist * kotlin.math.abs(ultimoMontoPosicion)
                             val roe = if (margenEstimado > 0) (pnl / margenEstimado) * 100 else 0.0
                             pos.copy(currentPrice = precioActual, pnlNeto = pnl, roePct = roe)
                         } else pos
                     }
                 }
 
+                // ✅ ESCUDO VIRTUAL EN RAM (Te protege si Binance rechazó el físico)
+                if (ultimoMontoPosicion > 0.0) {
+                    val tocoSlVirtual = if (senal == "LONG") precioActual <= slDinamico else precioActual >= slDinamico
+                    val tocoTpVirtual = if (senal == "LONG") precioActual >= tpDinamico else precioActual <= tpDinamico
+
+                    if (tocoSlVirtual || tocoTpVirtual) {
+                        AlertManager.agregarLog(
+                            "⚡ EJECUCIÓN VIRTUAL EN RAM:\n" +
+                                    "Símbolo: $symbol\n" +
+                                    "Motivo: Precio cruzó SL/TP Dinámico.\n" +
+                                    "Acción: Ejecutando cierre a MARKET de emergencia."
+                        )
+                        BinanceApiManager.limpiarOrdenesEstrictamente(config.apiKey, config.apiSecret, symbol)
+                        BinanceApiManager.ejecutarOrden(config.apiKey, config.apiSecret, symbol, ladoSalida, "MARKET", kotlin.math.abs(ultimoMontoPosicion), 0.0, config.tipoMargen)
+                        marcarComoCerrada(context, symbol)
+                        break
+                    }
+                }
+
                 // 4. LÓGICA DEL 70% (REACCIÓN INMEDIATA)
-                val distanciaTotal = abs(tpDinamico - entryPrice)
+                val distanciaTotal = kotlin.math.abs(tpDinamico - entryPrice)
                 if (distanciaTotal > 0) {
                     val progreso = if (senal == "LONG") (precioActual - entryPrice) / distanciaTotal else (entryPrice - precioActual) / distanciaTotal
 
@@ -245,7 +252,6 @@ object PositionManager {
                         val nuevoSl = if (senal == "LONG") entryPrice + distSl else entryPrice - distSl
                         val nuevoTp = if (senal == "LONG") tpDinamico + aumentoTp else tpDinamico - aumentoTp
 
-                        // PROTECCIÓN REFLEJO NINJA
                         val precioSeguro = BinanceApiManager.preciosWs[symbol] ?: BinanceApiManager.obtenerPrecioActual(symbol)
                         var mercadoCruzado = false
                         if (senal == "LONG" && (precioSeguro <= nuevoSl || precioSeguro >= nuevoTp)) mercadoCruzado = true
@@ -253,7 +259,7 @@ object PositionManager {
 
                         if (mercadoCruzado) {
                             AlertManager.agregarLog("⚡ Volatilidad extrema. Cerrando a MARKET.")
-                            BinanceApiManager.ejecutarOrden(config.apiKey, config.apiSecret, symbol, ladoSalida, "MARKET", abs(checkPos), 0.0, config.tipoMargen)
+                            BinanceApiManager.ejecutarOrden(config.apiKey, config.apiSecret, symbol, ladoSalida, "MARKET", kotlin.math.abs(checkPos), 0.0, config.tipoMargen)
                             marcarComoCerrada(context, symbol)
                             break
                         }
@@ -262,22 +268,20 @@ object PositionManager {
                         val slOk2 = BinanceApiManager.crearOrdenStop(config.apiKey, config.apiSecret, symbol, ladoSalida, "STOP_MARKET", nuevoSl)
 
                         if (!tpOk2 || !slOk2) {
-                            AlertManager.agregarLog("🚨 [KILL SWITCH] Binance rechazó los límites expansivos.")
-                            BinanceApiManager.ejecutarOrden(config.apiKey, config.apiSecret, symbol, ladoSalida, "MARKET", abs(checkPos), 0.0, config.tipoMargen)
-                            marcarComoCerrada(context, symbol)
-                            break
+                            AlertManager.agregarLog("🚨 Binance rechazó expansivos. La protección Virtual en RAM sigue activa en los nuevos valores.")
                         }
 
                         tpDinamico = nuevoTp
+                        slDinamico = nuevoSl
                         nivelTrailing++
 
                         _positions.update { lista ->
                             lista.map {
-                                if (it.symbol == symbol) it.copy(dynamicTp = tpDinamico, currentSl = nuevoSl, trailingLevel = nivelTrailing)
+                                if (it.symbol == symbol) it.copy(dynamicTp = tpDinamico, currentSl = slDinamico, trailingLevel = nivelTrailing)
                                 else it
                             }
                         }
-                        guardarEstado(context) // Guardamos el nuevo nivel en memoria física
+                        guardarEstado(context)
                         AlertManager.agregarLog("🛡️ [ÉXITO NIVEL $nivelTrailing] SL subido | TP extendido.")
                     }
                 }
