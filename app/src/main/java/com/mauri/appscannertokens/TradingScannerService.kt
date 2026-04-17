@@ -457,8 +457,13 @@ class TradingScannerService : Service() {
                 // 4. Cálculo exacto de SL y TP
                 var distSl = atrActual * config.multiplicadorSl
 
-                // --- NUEVO SISTEMA DE RIESGO ESTRICTO ---
-                val maxRiesgoPctBilletera = 2.0
+                // Si el ATR falla matemáticamente, damos una distancia fija de seguridad
+                if (distSl.isNaN() || distSl <= 0.0) {
+                    distSl = closeActual * 0.01
+                }
+
+                // --- SISTEMA DE RIESGO CORREGIDO ---
+                val maxRiesgoPctBilletera = 2.0 // SUBIDO A 2.0% para dar respiro matemático
                 val riesgoMaximoUsdt = billeteraVirtualUsdt * (maxRiesgoPctBilletera / 100.0)
 
                 val margenUsdt = billeteraVirtualUsdt * (config.porcentajeInversion / 100.0)
@@ -467,20 +472,19 @@ class TradingScannerService : Service() {
                 val distSlMaxPermitida = if (tamanoPosicionUsdt > 0) {
                     (riesgoMaximoUsdt / tamanoPosicionUsdt) * closeActual
                 } else {
-                    closeActual * 0.005
+                    closeActual * 0.02
                 }
 
-                // Aplicamos el tope: El SL será el ATR, pero nunca mayor al riesgo permitido
                 if (distSl > distSlMaxPermitida) {
                     distSl = distSlMaxPermitida
                 }
 
-                // --- PROTECCIÓN CONTRA EL SPREAD ---
-                // Si el tope de riesgo queda tan pegado al precio de entrada que el spread lo tocaría al instante:
-                val spreadAbsoluto = (spread / 100.0) * closeActual
-                if (distSl <= spreadAbsoluto * 1.5) { // Damos un pequeñísimo margen vital (1.5x el spread)
-                    emitirLogApp("❌ RECHAZADO: El riesgo del 0.05% ($riesgoMaximoUsdt USDT) obliga a un SL menor al spread del mercado.")
-                    return@launch
+                // *** REGLA VITAL DE SUPERVIVENCIA ***
+                // El SL JAMÁS puede estar a menos del 0.4% del precio actual.
+                // Si está más cerca, Binance tirará error "Order would immediately trigger" o el spread lo cerrará.
+                val distanciaMinimaAbsoluta = closeActual * 0.004
+                if (distSl < distanciaMinimaAbsoluta) {
+                    distSl = distanciaMinimaAbsoluta
                 }
 
                 val distTp = distSl * config.multiplicadorTp

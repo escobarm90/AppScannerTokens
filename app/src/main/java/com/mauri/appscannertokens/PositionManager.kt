@@ -96,7 +96,6 @@ object PositionManager {
         val ladoSalida = if (senal == "LONG") "SELL" else "BUY"
 
         var tpDinamico = posInicial.dynamicTp
-        var slDinamico = posInicial.currentSl
         var nivelTrailing = posInicial.trailingLevel
         val entryPrice = posInicial.entryPrice
 
@@ -123,20 +122,38 @@ object PositionManager {
             BinanceApiManager.limpiarOrdenesEstrictamente(config.apiKey, config.apiSecret, symbol)
 
             val precioActualSeguro = BinanceApiManager.obtenerPrecioActual(symbol)
-            var slFinal = posInicial.currentSl
-            var tpFinal = posInicial.dynamicTp
 
-           if (precioActualSeguro > 0) {
-                // Si hubo un deslizamiento de precio severo y ya pasamos tu SL dinámico estricto,
-                // Binance lo detectará y cerrará a Market automáticamente al inyectar las órdenes Stop.
-                // Ya NO re-escribimos el SL alejándolo artificialmente. Se respeta la matemática estricta.
-                if (senal == "LONG" && slFinal >= precioActualSeguro) {
-                    AlertManager.agregarLog("⚠️ Slippage extremo detectado. El SL será ejecutado de inmediato.")
-                } else if (senal == "SHORT" && slFinal <= precioActualSeguro) {
-                    AlertManager.agregarLog("⚠️ Slippage extremo detectado. El SL será ejecutado de inmediato.")
-                }
+            // 1. RESCATAMOS LAS DISTANCIAS ORIGINALES (La amplitud del escudo)
+            val distSlOriginal = abs(posInicial.entryPrice - posInicial.currentSl)
+            val distTpOriginal = abs(posInicial.dynamicTp - posInicial.entryPrice)
+
+            // 2. RECALCULAMOS BASADO EN EL PRECIO REAL DE EJECUCIÓN (No el de la alerta vieja)
+            var slFinal = if (senal == "LONG") precioActualSeguro - distSlOriginal else precioActualSeguro + distSlOriginal
+            var tpFinal = if (senal == "LONG") precioActualSeguro + distTpOriginal else precioActualSeguro - distTpOriginal
+
+            // 3. BLINDAJE ANTI-RECHAZO DE BINANCE (Mínimo 0.4% de distancia vital)
+            // Si el SL quedó pegado por culpa del spread o riesgo microscópico, lo empujamos
+            val distMinimaVital = precioActualSeguro * 0.004
+
+            if (abs(precioActualSeguro - slFinal) < distMinimaVital) {
+                slFinal = if (senal == "LONG") precioActualSeguro - distMinimaVital else precioActualSeguro + distMinimaVital
+            }
+            if (abs(tpFinal - precioActualSeguro) < distMinimaVital) {
+                tpFinal = if (senal == "LONG") precioActualSeguro + distMinimaVital else precioActualSeguro - distMinimaVital
             }
 
+            // 4. IMPRESIÓN POR CONSOLA (Listada una abajo de otra como pediste)
+            AlertManager.agregarLog(
+                "🛡️ RECALCULO DE ESCUDOS EN EJECUCIÓN:\n" +
+                        "Símbolo: $symbol\n" +
+                        "Precio Alerta Antigua: ${posInicial.entryPrice}\n" +
+                        "Precio Real Ejecución: $precioActualSeguro\n" +
+                        "Distancia SL Original: $distSlOriginal\n" +
+                        "SL Final Aplicado: $slFinal\n" +
+                        "TP Final Aplicado: $tpFinal"
+            )
+
+            // 5. COLOCAMOS LAS ÓRDENES (Ahora sí, matemáticamente válidas para Binance)
             val tpOk = BinanceApiManager.crearOrdenStop(config.apiKey, config.apiSecret, symbol, ladoSalida, "TAKE_PROFIT_MARKET", tpFinal)
             val slOk = BinanceApiManager.crearOrdenStop(config.apiKey, config.apiSecret, symbol, ladoSalida, "STOP_MARKET", slFinal)
 
@@ -159,7 +176,6 @@ object PositionManager {
             }
 
             tpDinamico = tpFinal
-            slDinamico = slFinal
             _positions.update { l -> l.map { if (it.symbol == symbol) it.copy(dynamicTp = tpFinal, currentSl = slFinal) else it } }
             guardarEstado(context)
         }
@@ -253,12 +269,11 @@ object PositionManager {
                         }
 
                         tpDinamico = nuevoTp
-                        slDinamico = nuevoSl
                         nivelTrailing++
 
                         _positions.update { lista ->
                             lista.map {
-                                if (it.symbol == symbol) it.copy(dynamicTp = tpDinamico, currentSl = slDinamico, trailingLevel = nivelTrailing)
+                                if (it.symbol == symbol) it.copy(dynamicTp = tpDinamico, currentSl = nuevoSl, trailingLevel = nivelTrailing)
                                 else it
                             }
                         }

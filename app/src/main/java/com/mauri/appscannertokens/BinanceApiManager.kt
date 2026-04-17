@@ -20,6 +20,9 @@ object BinanceApiManager {
 
     // --- MOTOR WEBSOCKET CACHÉ (0.3s) ---
     val preciosWs = ConcurrentHashMap<String, Double>()
+
+    // CACHÉ DE DECIMALES PARA NO SATURAR LA API
+    val precisionCache = ConcurrentHashMap<String, Pair<Int, Int>>()
     private var tickerWs: WebSocket? = null
 
     fun iniciarWsTickers() {
@@ -33,10 +36,19 @@ object BinanceApiManager {
                         val obj = arr.get(i).asJsonObject
                         preciosWs[obj.get("s").asString] = obj.get("c").asDouble
                     }
-                } catch (e: Exception) {}
+                } catch (e: Exception) {
+                }
             }
-            override fun onClosed(webSocket: WebSocket, code: Int, reason: String) { tickerWs = null }
-            override fun onFailure(webSocket: WebSocket, t: Throwable, response: okhttp3.Response?) {
+
+            override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
+                tickerWs = null
+            }
+
+            override fun onFailure(
+                webSocket: WebSocket,
+                t: Throwable,
+                response: okhttp3.Response?
+            ) {
                 tickerWs = null
                 Thread.sleep(5000)
                 iniciarWsTickers()
@@ -53,98 +65,133 @@ object BinanceApiManager {
     }
 
     suspend fun obtenerPrecisiones(symbol: String): Pair<Int, Int> = withContext(Dispatchers.IO) {
+        if (precisionCache.containsKey(symbol)) return@withContext precisionCache[symbol]!!
+
         try {
             val req = Request.Builder().url("https://fapi.binance.com/fapi/v1/exchangeInfo").get().build()
-            val result = client.newCall(req).execute().use { res ->
+            client.newCall(req).execute().use { res ->
                 if (res.isSuccessful) {
                     val body = res.body?.string() ?: return@use Pair(3, 4)
                     val json = JsonParser.parseString(body).asJsonObject
                     val symbols = json.getAsJsonArray("symbols")
                     for (i in 0 until symbols.size()) {
                         val symObj = symbols.get(i).asJsonObject
-                        if (symObj.get("symbol").asString == symbol) {
-                            val qtyPrec = symObj.get("quantityPrecision").asInt
-                            val pricePrec = symObj.get("pricePrecision").asInt
-                            return@use Pair(qtyPrec, pricePrec)
-                        }
+                        val sym = symObj.get("symbol").asString
+                        val qtyPrec = symObj.get("quantityPrecision").asInt
+                        val pricePrec = symObj.get("pricePrecision").asInt
+                        precisionCache[sym] = Pair(qtyPrec, pricePrec)
                     }
-                    Pair(3, 4)
+                    return@use precisionCache[symbol] ?: Pair(3, 4)
                 } else {
-                    Pair(3, 4)
+                    // ¡AQUÍ ESTÁ EL ELSE QUE FALTA PARA QUE KOTLIN NO FALLE!
+                    return@use Pair(3, 4)
                 }
             }
-            return@withContext result
-        } catch (e: Exception) {}
+        } catch (e: Exception) {
+        }
         return@withContext Pair(3, 4)
     }
 
-    suspend fun obtenerSaldoUSDT(apiKey: String, apiSecret: String): Double = withContext(Dispatchers.IO) {
-        if (apiKey.isEmpty() || apiSecret.isEmpty()) return@withContext 0.0
-        try {
-            val ts = System.currentTimeMillis()
-            val query = "recvWindow=60000&timestamp=$ts"
-            val sig = crearFirma(query, apiSecret)
-            val req = Request.Builder().url("https://fapi.binance.com/fapi/v2/balance?$query&signature=$sig").addHeader("X-MBX-APIKEY", apiKey).build()
-            val result = client.newCall(req).execute().use { res ->
-                if (res.isSuccessful) {
-                    val balances = JsonParser.parseString(res.body?.string() ?: "[]").asJsonArray
-                    for (i in 0 until balances.size()) {
-                        val asset = balances.get(i).asJsonObject
-                        if (asset.get("asset").asString == "USDT") return@use asset.get("availableBalance").asDouble
+    suspend fun obtenerSaldoUSDT(apiKey: String, apiSecret: String): Double =
+        withContext(Dispatchers.IO) {
+            if (apiKey.isEmpty() || apiSecret.isEmpty()) return@withContext 0.0
+            try {
+                val ts = System.currentTimeMillis()
+                val query = "recvWindow=60000&timestamp=$ts"
+                val sig = crearFirma(query, apiSecret)
+                val req = Request.Builder()
+                    .url("https://fapi.binance.com/fapi/v2/balance?$query&signature=$sig")
+                    .addHeader("X-MBX-APIKEY", apiKey).build()
+                val result = client.newCall(req).execute().use { res ->
+                    if (res.isSuccessful) {
+                        val balances =
+                            JsonParser.parseString(res.body?.string() ?: "[]").asJsonArray
+                        for (i in 0 until balances.size()) {
+                            val asset = balances.get(i).asJsonObject
+                            if (asset.get("asset").asString == "USDT") return@use asset.get("availableBalance").asDouble
+                        }
+                        0.0
+                    } else {
+                        0.0
                     }
-                    0.0
-                } else {
-                    0.0
                 }
+                return@withContext result
+            } catch (e: Exception) {
             }
-            return@withContext result
-        } catch (e: Exception) {}
-        return@withContext 0.0
-    }
+            return@withContext 0.0
+        }
 
-    suspend fun probarConexion(apiKey: String, apiSecret: String): Pair<Boolean, String> = withContext(Dispatchers.IO) {
-        try {
-            val ts = System.currentTimeMillis()
-            val query = "recvWindow=60000&timestamp=$ts"
-            val sig = crearFirma(query, apiSecret)
-            val req = Request.Builder().url("https://fapi.binance.com/fapi/v2/balance?$query&signature=$sig").addHeader("X-MBX-APIKEY", apiKey).build()
-            val result = client.newCall(req).execute().use { res ->
-                val body = res.body?.string() ?: ""
-                if (res.isSuccessful) {
-                    Pair(true, "¡Conexión Exitosa con Binance Futuros!")
-                } else {
-                    val errorMsg = JSONObject(body).optString("msg", "Error desconocido")
-                    Pair(false, "Fallo: $errorMsg")
+    suspend fun probarConexion(apiKey: String, apiSecret: String): Pair<Boolean, String> =
+        withContext(Dispatchers.IO) {
+            try {
+                val ts = System.currentTimeMillis()
+                val query = "recvWindow=60000&timestamp=$ts"
+                val sig = crearFirma(query, apiSecret)
+                val req = Request.Builder()
+                    .url("https://fapi.binance.com/fapi/v2/balance?$query&signature=$sig")
+                    .addHeader("X-MBX-APIKEY", apiKey).build()
+                val result = client.newCall(req).execute().use { res ->
+                    val body = res.body?.string() ?: ""
+                    if (res.isSuccessful) {
+                        Pair(true, "¡Conexión Exitosa con Binance Futuros!")
+                    } else {
+                        val errorMsg = JSONObject(body).optString("msg", "Error desconocido")
+                        Pair(false, "Fallo: $errorMsg")
+                    }
                 }
+                return@withContext result
+            } catch (e: Exception) {
+                return@withContext Pair(false, "Error de red: ${e.message}")
             }
-            return@withContext result
-        } catch (e: Exception) { return@withContext Pair(false, "Error de red: ${e.message}") }
-    }
+        }
 
-    suspend fun ejecutarOrden(apiKey: String, apiSecret: String, symbol: String, side: String, orderType: String, quantity: Double, price: Double, marginType: String): Triple<Boolean, String, Long> = withContext(Dispatchers.IO) {
+    suspend fun ejecutarOrden(
+        apiKey: String,
+        apiSecret: String,
+        symbol: String,
+        side: String,
+        orderType: String,
+        quantity: Double,
+        price: Double,
+        marginType: String
+    ): Triple<Boolean, String, Long> = withContext(Dispatchers.IO) {
         try {
             try {
                 val ts1 = System.currentTimeMillis()
                 val q1 = "symbol=$symbol&marginType=$marginType&recvWindow=60000&timestamp=$ts1"
-                val reqMargen = Request.Builder().url("https://fapi.binance.com/fapi/v1/marginType").post(FormBody.Builder().add("symbol", symbol).add("marginType", marginType).add("recvWindow", "60000").add("timestamp", ts1.toString()).add("signature", crearFirma(q1, apiSecret)).build()).addHeader("X-MBX-APIKEY", apiKey).build()
+                val reqMargen = Request.Builder().url("https://fapi.binance.com/fapi/v1/marginType")
+                    .post(
+                        FormBody.Builder().add("symbol", symbol).add("marginType", marginType)
+                            .add("recvWindow", "60000").add("timestamp", ts1.toString())
+                            .add("signature", crearFirma(q1, apiSecret)).build()
+                    ).addHeader("X-MBX-APIKEY", apiKey).build()
                 client.newCall(reqMargen).execute().close()
-            } catch (e: Exception) {}
+            } catch (e: Exception) {
+            }
 
             val ts2 = System.currentTimeMillis()
             val (qtyPrec, pricePrec) = obtenerPrecisiones(symbol)
-            val qtyStr = BigDecimal.valueOf(quantity).setScale(qtyPrec, java.math.RoundingMode.DOWN).stripTrailingZeros().toPlainString()
-            val priceStr = BigDecimal.valueOf(price).setScale(pricePrec, java.math.RoundingMode.DOWN).stripTrailingZeros().toPlainString()
+            val qtyStr = BigDecimal.valueOf(quantity).setScale(qtyPrec, java.math.RoundingMode.DOWN)
+                .stripTrailingZeros().toPlainString()
+            val priceStr =
+                BigDecimal.valueOf(price).setScale(pricePrec, java.math.RoundingMode.DOWN)
+                    .stripTrailingZeros().toPlainString()
 
             var qOrden = "symbol=$symbol&side=$side&type=$orderType&quantity=$qtyStr"
-            val form = FormBody.Builder().add("symbol", symbol).add("side", side).add("type", orderType).add("quantity", qtyStr)
+            val form =
+                FormBody.Builder().add("symbol", symbol).add("side", side).add("type", orderType)
+                    .add("quantity", qtyStr)
             if (orderType == "LIMIT") {
                 qOrden += "&price=$priceStr&timeInForce=GTC"
                 form.add("price", priceStr).add("timeInForce", "GTC")
             }
             qOrden += "&recvWindow=60000&timestamp=$ts2"
-            form.add("recvWindow", "60000").add("timestamp", ts2.toString()).add("signature", crearFirma(qOrden, apiSecret))
+            form.add("recvWindow", "60000").add("timestamp", ts2.toString())
+                .add("signature", crearFirma(qOrden, apiSecret))
 
-            val req = Request.Builder().url("https://fapi.binance.com/fapi/v1/order").post(form.build()).addHeader("X-MBX-APIKEY", apiKey).build()
+            val req =
+                Request.Builder().url("https://fapi.binance.com/fapi/v1/order").post(form.build())
+                    .addHeader("X-MBX-APIKEY", apiKey).build()
             val result = client.newCall(req).execute().use { res ->
                 val body = res.body?.string() ?: ""
                 if (res.isSuccessful) {
@@ -155,14 +202,28 @@ object BinanceApiManager {
                 }
             }
             return@withContext result
-        } catch (e: Exception) { return@withContext Triple(false, "Excepción: ${e.message}", 0L) }
+        } catch (e: Exception) {
+            return@withContext Triple(false, "Excepción: ${e.message}", 0L)
+        }
     }
 
-    suspend fun obtenerEstadoOrden(apiKey: String, apiSecret: String, symbol: String, orderId: Long): String = withContext(Dispatchers.IO) {
+    suspend fun obtenerEstadoOrden(
+        apiKey: String,
+        apiSecret: String,
+        symbol: String,
+        orderId: Long
+    ): String = withContext(Dispatchers.IO) {
         try {
             val ts = System.currentTimeMillis()
             val q = "symbol=$symbol&orderId=$orderId&recvWindow=60000&timestamp=$ts"
-            val req = Request.Builder().url("https://fapi.binance.com/fapi/v1/order?$q&signature=${crearFirma(q, apiSecret)}").addHeader("X-MBX-APIKEY", apiKey).get().build()
+            val req = Request.Builder().url(
+                "https://fapi.binance.com/fapi/v1/order?$q&signature=${
+                    crearFirma(
+                        q,
+                        apiSecret
+                    )
+                }"
+            ).addHeader("X-MBX-APIKEY", apiKey).get().build()
             val result = client.newCall(req).execute().use { res ->
                 if (res.isSuccessful) {
                     JSONObject(res.body?.string() ?: "").optString("status", "UNKNOWN")
@@ -171,15 +232,27 @@ object BinanceApiManager {
                 }
             }
             return@withContext result
-        } catch (e: Exception) {}
+        } catch (e: Exception) {
+        }
         return@withContext "UNKNOWN"
     }
 
-    suspend fun obtenerCantidadPosicion(apiKey: String, apiSecret: String, symbol: String): Double? = withContext(Dispatchers.IO) {
+    suspend fun obtenerCantidadPosicion(
+        apiKey: String,
+        apiSecret: String,
+        symbol: String
+    ): Double? = withContext(Dispatchers.IO) {
         try {
             val ts = System.currentTimeMillis()
             val q = "symbol=$symbol&recvWindow=60000&timestamp=$ts"
-            val req = Request.Builder().url("https://fapi.binance.com/fapi/v2/positionRisk?$q&signature=${crearFirma(q, apiSecret)}").addHeader("X-MBX-APIKEY", apiKey).build()
+            val req = Request.Builder().url(
+                "https://fapi.binance.com/fapi/v2/positionRisk?$q&signature=${
+                    crearFirma(
+                        q,
+                        apiSecret
+                    )
+                }"
+            ).addHeader("X-MBX-APIKEY", apiKey).build()
             val result = client.newCall(req).execute().use { res ->
                 val body = res.body?.string() ?: ""
                 if (res.isSuccessful && body.startsWith("[")) {
@@ -195,44 +268,71 @@ object BinanceApiManager {
                 }
             }
             return@withContext result
-        } catch (e: Exception) {}
+        } catch (e: Exception) {
+        }
         return@withContext null
     }
 
     suspend fun obtenerPrecioActual(symbol: String): Double = withContext(Dispatchers.IO) {
         try {
-            val req = Request.Builder().url("https://fapi.binance.com/fapi/v1/ticker/price?symbol=$symbol").build()
+            val req = Request.Builder()
+                .url("https://fapi.binance.com/fapi/v1/ticker/price?symbol=$symbol").build()
             val result = client.newCall(req).execute().use { res ->
                 if (res.isSuccessful) {
-                    JsonParser.parseString(res.body?.string() ?: "").asJsonObject.get("price").asDouble
+                    JsonParser.parseString(
+                        res.body?.string() ?: ""
+                    ).asJsonObject.get("price").asDouble
                 } else {
                     0.0
                 }
             }
             return@withContext result
-        } catch (e: Exception) {}
+        } catch (e: Exception) {
+        }
         return@withContext 0.0
     }
 
-    suspend fun cancelarOrdenes(apiKey: String, apiSecret: String, symbol: String): Boolean = withContext(Dispatchers.IO) {
-        try {
-            val ts = System.currentTimeMillis()
-            val q = "symbol=$symbol&recvWindow=60000&timestamp=$ts"
-            val req = Request.Builder().url("https://fapi.binance.com/fapi/v1/allOpenOrders").delete(FormBody.Builder().add("symbol", symbol).add("recvWindow", "60000").add("timestamp", ts.toString()).add("signature", crearFirma(q, apiSecret)).build()).addHeader("X-MBX-APIKEY", apiKey).build()
-            val result = client.newCall(req).execute().use { res ->
-                res.isSuccessful
+    suspend fun cancelarOrdenes(apiKey: String, apiSecret: String, symbol: String): Boolean =
+        withContext(Dispatchers.IO) {
+            try {
+                val ts = System.currentTimeMillis()
+                val q = "symbol=$symbol&recvWindow=60000&timestamp=$ts"
+                val req = Request.Builder().url("https://fapi.binance.com/fapi/v1/allOpenOrders")
+                    .delete(
+                        FormBody.Builder().add("symbol", symbol).add("recvWindow", "60000")
+                            .add("timestamp", ts.toString())
+                            .add("signature", crearFirma(q, apiSecret)).build()
+                    ).addHeader("X-MBX-APIKEY", apiKey).build()
+                val result = client.newCall(req).execute().use { res ->
+                    res.isSuccessful
+                }
+                return@withContext result
+            } catch (e: Exception) {
+                return@withContext false
             }
-            return@withContext result
-        } catch (e: Exception) { return@withContext false }
-    }
+        }
 
-    suspend fun limpiarOrdenesEstrictamente(apiKey: String, apiSecret: String, symbol: String): Boolean = withContext(Dispatchers.IO) {
-        try { cancelarOrdenes(apiKey, apiSecret, symbol) } catch (e: Exception) {}
+    suspend fun limpiarOrdenesEstrictamente(
+        apiKey: String,
+        apiSecret: String,
+        symbol: String
+    ): Boolean = withContext(Dispatchers.IO) {
+        try {
+            cancelarOrdenes(apiKey, apiSecret, symbol)
+        } catch (e: Exception) {
+        }
         for (i in 1..10) {
             try {
                 val ts = System.currentTimeMillis()
                 val q = "symbol=$symbol&recvWindow=60000&timestamp=$ts"
-                val req = Request.Builder().url("https://fapi.binance.com/fapi/v1/openOrders?$q&signature=${crearFirma(q, apiSecret)}").addHeader("X-MBX-APIKEY", apiKey).get().build()
+                val req = Request.Builder().url(
+                    "https://fapi.binance.com/fapi/v1/openOrders?$q&signature=${
+                        crearFirma(
+                            q,
+                            apiSecret
+                        )
+                    }"
+                ).addHeader("X-MBX-APIKEY", apiKey).get().build()
                 val result = client.newCall(req).execute().use { res ->
                     if (res.isSuccessful) {
                         val arr = JsonParser.parseString(res.body?.string() ?: "[]").asJsonArray
@@ -241,9 +341,23 @@ object BinanceApiManager {
                             val orderId = arr.get(j).asJsonObject.get("orderId").asLong
                             try {
                                 val delTs = System.currentTimeMillis()
-                                val delReq = Request.Builder().url("https://fapi.binance.com/fapi/v1/order").delete(FormBody.Builder().add("symbol", symbol).add("orderId", orderId.toString()).add("recvWindow", "60000").add("timestamp", delTs.toString()).add("signature", crearFirma("symbol=$symbol&orderId=$orderId&recvWindow=60000&timestamp=$delTs", apiSecret)).build()).addHeader("X-MBX-APIKEY", apiKey).build()
+                                val delReq =
+                                    Request.Builder().url("https://fapi.binance.com/fapi/v1/order")
+                                        .delete(
+                                            FormBody.Builder().add("symbol", symbol)
+                                                .add("orderId", orderId.toString())
+                                                .add("recvWindow", "60000")
+                                                .add("timestamp", delTs.toString()).add(
+                                                "signature",
+                                                crearFirma(
+                                                    "symbol=$symbol&orderId=$orderId&recvWindow=60000&timestamp=$delTs",
+                                                    apiSecret
+                                                )
+                                            ).build()
+                                        ).addHeader("X-MBX-APIKEY", apiKey).build()
                                 client.newCall(delReq).execute().close()
-                            } catch (e: Exception) {}
+                            } catch (e: Exception) {
+                            }
                         }
                         false
                     } else {
@@ -251,25 +365,50 @@ object BinanceApiManager {
                     }
                 }
                 if (result) return@withContext true
-            } catch (e: Exception) {}
+            } catch (e: Exception) {
+            }
             kotlinx.coroutines.delay(200)
         }
         return@withContext false
     }
 
-    suspend fun crearOrdenStop(apiKey: String, apiSecret: String, symbol: String, side: String, type: String, stopPrice: Double): Boolean = withContext(Dispatchers.IO) {
+    suspend fun crearOrdenStop(
+        apiKey: String,
+        apiSecret: String,
+        symbol: String,
+        side: String,
+        type: String,
+        stopPrice: Double
+    ): Boolean = withContext(Dispatchers.IO) {
         try {
             val ts = System.currentTimeMillis()
             val (_, pricePrec) = obtenerPrecisiones(symbol)
-            val priceStr = BigDecimal.valueOf(stopPrice).setScale(pricePrec, java.math.RoundingMode.DOWN).stripTrailingZeros().toPlainString()
+            val priceStr =
+                BigDecimal.valueOf(stopPrice).setScale(pricePrec, java.math.RoundingMode.DOWN)
+                    .stripTrailingZeros().toPlainString()
 
-            val q = "symbol=$symbol&side=$side&type=$type&stopPrice=$priceStr&closePosition=true&workingType=CONTRACT_PRICE&recvWindow=60000&timestamp=$ts"
-            val form = FormBody.Builder().add("symbol", symbol).add("side", side).add("type", type).add("stopPrice", priceStr).add("closePosition", "true").add("workingType", "CONTRACT_PRICE").add("recvWindow", "60000").add("timestamp", ts.toString()).add("signature", crearFirma(q, apiSecret))
-            val req = Request.Builder().url("https://fapi.binance.com/fapi/v1/order").post(form.build()).addHeader("X-MBX-APIKEY", apiKey).build()
+            val q =
+                "symbol=$symbol&side=$side&type=$type&stopPrice=$priceStr&closePosition=true&workingType=CONTRACT_PRICE&recvWindow=60000&timestamp=$ts"
+            val form = FormBody.Builder().add("symbol", symbol).add("side", side).add("type", type)
+                .add("stopPrice", priceStr).add("closePosition", "true")
+                .add("workingType", "CONTRACT_PRICE").add("recvWindow", "60000")
+                .add("timestamp", ts.toString()).add("signature", crearFirma(q, apiSecret))
+            val req =
+                Request.Builder().url("https://fapi.binance.com/fapi/v1/order").post(form.build())
+                    .addHeader("X-MBX-APIKEY", apiKey).build()
+
             val result = client.newCall(req).execute().use { res ->
+                val body = res.body?.string() ?: ""
+                if (!res.isSuccessful) {
+                    // ESTO IMPRIMIRÁ EL MOTIVO EXACTO DEL RECHAZO EN TU CONSOLA NEGRA
+                    val errorMsg = JSONObject(body).optString("msg", "Error Desconocido")
+                    AlertManager.agregarLog("❌ RECHAZO BINANCE ($type): $errorMsg")
+                }
                 res.isSuccessful
             }
             return@withContext result
-        } catch (e: Exception) { return@withContext false }
+        } catch (e: Exception) {
+            return@withContext false
+        }
     }
 }
