@@ -124,15 +124,15 @@ object PositionManager {
 
             val precioActualSeguro = BinanceApiManager.obtenerPrecioActual(symbol)
 
-            // 1. RESCATAMOS LAS DISTANCIAS ORIGINALES
+            // 1. RESCATAMOS LAS DISTANCIAS MATEMÁTICAS PURAS
             val distSlOriginal = kotlin.math.abs(posInicial.entryPrice - posInicial.currentSl)
             val distTpOriginal = kotlin.math.abs(posInicial.dynamicTp - posInicial.entryPrice)
 
-            // 2. RECALCULAMOS BASADO EN EL PRECIO REAL DE EJECUCIÓN
+            // 2. RECALCULAMOS DESDE EL PRECIO DE ENTRADA REAL EN BINANCE
             var slFinal = if (senal == "LONG") precioActualSeguro - distSlOriginal else precioActualSeguro + distSlOriginal
             var tpFinal = if (senal == "LONG") precioActualSeguro + distTpOriginal else precioActualSeguro - distTpOriginal
 
-            // 3. BLINDAJE ANTI-RECHAZO DE BINANCE (Mínimo 0.4%)
+            // 3. REGLA DE SUPERVIVENCIA: BINANCE EXIGE MÍNIMO 0.4% DE DISTANCIA
             val distMinimaVital = precioActualSeguro * 0.004
             if (kotlin.math.abs(precioActualSeguro - slFinal) < distMinimaVital) {
                 slFinal = if (senal == "LONG") precioActualSeguro - distMinimaVital else precioActualSeguro + distMinimaVital
@@ -141,10 +141,12 @@ object PositionManager {
                 tpFinal = if (senal == "LONG") precioActualSeguro + distMinimaVital else precioActualSeguro - distMinimaVital
             }
 
+            // LISTADO DE CONSOLA VERTICAL
             AlertManager.agregarLog(
                 "🛡️ INTENTO DE COLOCAR ESCUDOS FÍSICOS:\n" +
                         "Símbolo: $symbol\n" +
                         "Lado Salida: $ladoSalida\n" +
+                        "Precio Actual (Base): $precioActualSeguro\n" +
                         "SL Calculado: $slFinal\n" +
                         "TP Calculado: $tpFinal"
             )
@@ -152,7 +154,7 @@ object PositionManager {
             val tpOk = BinanceApiManager.crearOrdenStop(config.apiKey, config.apiSecret, symbol, ladoSalida, "TAKE_PROFIT_MARKET", tpFinal)
             val slOk = BinanceApiManager.crearOrdenStop(config.apiKey, config.apiSecret, symbol, ladoSalida, "STOP_MARKET", slFinal)
 
-            // ✅ SOLUCIÓN DEFINITIVA: APAGAMOS EL KILL SWITCH DE RESCATE
+            // ✅ SOLUCIÓN DEFINITIVA: KILL SWITCH APAGADO + ESCUDO VIRTUAL
             if (!tpOk || !slOk) {
                 AlertManager.agregarLog(
                     "⚠️ RECHAZO DE BINANCE DETECTADO:\n" +
@@ -170,9 +172,6 @@ object PositionManager {
             guardarEstado(context)
         }
 
-        // ==========================================
-        // FASE 3: TRAILING STOP EXPANSIVO (0.3s)
-        // ==========================================
         AlertManager.agregarLog("⏱️ Iniciando Trailing 0.3s (RAM WS) para $symbol...")
         var ultimoChequeoApi = 0L
         var ultimoMontoPosicion = 0.0
@@ -196,7 +195,6 @@ object PositionManager {
                 val precioActual = BinanceApiManager.preciosWs[symbol]
                 if (precioActual == null) continue
 
-                // 3. ACTUALIZAR UI EN VIVO
                 _positions.update { lista ->
                     lista.map { pos ->
                         if (pos.symbol == symbol) {
@@ -209,7 +207,7 @@ object PositionManager {
                     }
                 }
 
-                // ✅ ESCUDO VIRTUAL EN RAM (Te protege si Binance rechazó el físico)
+                // ✅ ESCUDO VIRTUAL EN RAM (CIERRA DESDE EL TELÉFONO SI BINANCE FALLA)
                 if (ultimoMontoPosicion > 0.0) {
                     val tocoSlVirtual = if (senal == "LONG") precioActual <= slDinamico else precioActual >= slDinamico
                     val tocoTpVirtual = if (senal == "LONG") precioActual >= tpDinamico else precioActual <= tpDinamico
@@ -228,7 +226,6 @@ object PositionManager {
                     }
                 }
 
-                // 4. LÓGICA DEL 70% (REACCIÓN INMEDIATA)
                 val distanciaTotal = kotlin.math.abs(tpDinamico - entryPrice)
                 if (distanciaTotal > 0) {
                     val progreso = if (senal == "LONG") (precioActual - entryPrice) / distanciaTotal else (entryPrice - precioActual) / distanciaTotal

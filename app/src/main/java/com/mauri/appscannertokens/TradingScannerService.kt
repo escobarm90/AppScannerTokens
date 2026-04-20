@@ -37,15 +37,16 @@ import java.time.ZonedDateTime
 import java.util.Locale
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.ConcurrentHashMap
+import org.ta4j.core.num.DoubleNum
 
 // =========================================================================
 // INDICADORES TÉCNICOS (REPLICA DE indicadores.py)
 // =========================================================================
 class TokenData(symbol: String) {
-    // 1. OBLIGAMOS A TA4J A USAR DECIMAL NUM PARA EVITAR EL CHOQUE DE TIPOS (Evita el NaN)
+    // Forzamos DoubleNum para evitar el NaN silencioso en el procesador del teléfono
     val series: BaseBarSeries = BaseBarSeriesBuilder()
         .withName(symbol)
-        .withNumTypeOf(DecimalNum::class.java)
+        .withNumTypeOf(DoubleNum::class.java)
         .build().apply {
             maximumBarCount = 300
         }
@@ -53,8 +54,8 @@ class TokenData(symbol: String) {
     val closePrice = ClosePriceIndicator(series)
     val volumeInd = VolumeIndicator(series)
 
-    val rsi = RSIIndicator(closePrice, 14) // RSI_PERIODOS
-    val atr = ATRIndicator(series, 7) // ATR de 7 para reacción rápida
+    val rsi = RSIIndicator(closePrice, 14)
+    val atr = ATRIndicator(series, 7)
     val ema7 = EMAIndicator(closePrice, 7)
     val ema200 = EMAIndicator(closePrice, 200)
     val volSma = SMAIndicator(volumeInd, 20)
@@ -63,8 +64,8 @@ class TokenData(symbol: String) {
     val stdDev = StandardDeviationIndicator(closePrice, 20)
     val sma20 = SMAIndicator(closePrice, 20)
     val bbMiddle = BollingerBandsMiddleIndicator(sma20)
-    val bbUpper = BollingerBandsUpperIndicator(bbMiddle, stdDev, DecimalNum.valueOf("2.0"))
-    val bbLower = BollingerBandsLowerIndicator(bbMiddle, stdDev, DecimalNum.valueOf("2.0"))
+    val bbUpper = BollingerBandsUpperIndicator(bbMiddle, stdDev, series.numOf(2.0))
+    val bbLower = BollingerBandsLowerIndicator(bbMiddle, stdDev, series.numOf(2.0))
 
     val macdLine = MACDIndicator(closePrice, 12, 26)
     val macdSignal = EMAIndicator(macdLine, 9)
@@ -249,7 +250,7 @@ class TradingScannerService : Service() {
         try {
             val response = client.newCall(request).execute()
             val body = response.body?.string() ?: ""
-            response.close() // Cerramos manualmente en lugar de usar .use
+            response.close()
 
             if (!body.startsWith("[")) return
 
@@ -257,13 +258,14 @@ class TradingScannerService : Service() {
             for (i in 0 until klines.size()) {
                 val kline = klines.get(i).asJsonArray
                 val endTime = ZonedDateTime.ofInstant(Instant.ofEpochMilli(kline.get(6).asLong), ZoneId.of("UTC"))
+
                 val bar = BaseBar(duration, endTime,
-                    DecimalNum.valueOf(kline.get(1).asString),
-                    DecimalNum.valueOf(kline.get(2).asString),
-                    DecimalNum.valueOf(kline.get(3).asString),
-                    DecimalNum.valueOf(kline.get(4).asString),
-                    DecimalNum.valueOf(kline.get(5).asString),
-                    DecimalNum.valueOf("0")
+                    tokenData.series.numOf(kline.get(1).asString.toDoubleOrNull() ?: 0.0),
+                    tokenData.series.numOf(kline.get(2).asString.toDoubleOrNull() ?: 0.0),
+                    tokenData.series.numOf(kline.get(3).asString.toDoubleOrNull() ?: 0.0),
+                    tokenData.series.numOf(kline.get(4).asString.toDoubleOrNull() ?: 0.0),
+                    tokenData.series.numOf(kline.get(5).asString.toDoubleOrNull() ?: 0.0),
+                    tokenData.series.numOf(0.0)
                 )
                 tokenData.series.addBar(bar)
             }
@@ -299,12 +301,12 @@ class TradingScannerService : Service() {
         synchronized(tData) {
             try {
                 val bar = BaseBar(d, time,
-                    DecimalNum.valueOf(o),
-                    DecimalNum.valueOf(h),
-                    DecimalNum.valueOf(l),
-                    DecimalNum.valueOf(c),
-                    DecimalNum.valueOf(v),
-                    DecimalNum.valueOf(0)
+                    tData.series.numOf(o),
+                    tData.series.numOf(h),
+                    tData.series.numOf(l),
+                    tData.series.numOf(c),
+                    tData.series.numOf(v),
+                    tData.series.numOf(0.0)
                 )
                 if (tData.series.barCount == 0) return
                 if (time.isEqual(tData.series.lastBar.endTime)) tData.series.addBar(bar, true)
