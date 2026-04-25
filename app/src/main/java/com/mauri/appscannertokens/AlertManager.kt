@@ -2,6 +2,7 @@ package com.mauri.appscannertokens
 
 import android.content.Context
 import android.media.RingtoneManager
+import androidx.core.content.edit
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -47,10 +48,9 @@ object AlertManager {
             val tope = if (nuevaLista.size > 5) nuevaLista.take(5) else nuevaLista
 
             // Guardado físico en el teléfono, ahora respetando las alertas preexistentes
-            context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-                .edit()
-                .putString("lista", gson.toJson(tope))
-                .apply()
+            context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit {
+                putString("lista", gson.toJson(tope))
+            }
                 
             tope
         }
@@ -59,13 +59,15 @@ object AlertManager {
         try {
             val uri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
             RingtoneManager.getRingtone(context, uri).play()
-        } catch (e: Exception) {}
+        } catch (_: Exception) {}
     }
     
     fun removerAlerta(context: Context, alerta: TradingScannerService.AlertData) {
         _alertas.update { actual ->
             val nueva = actual.filter { it != alerta }
-            context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putString("lista", gson.toJson(nueva)).apply()
+            context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit {
+                putString("lista", gson.toJson(nueva))
+            }
             nueva
         }
     }
