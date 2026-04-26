@@ -1,6 +1,5 @@
 package com.mauri.appscannertokens
 
-import android.app.Activity
 import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -27,10 +26,10 @@ import java.util.Locale
 @Composable
 fun ConfigScreen(
     currentConfig: UserConfig,
+    onTestConnection: suspend (UserConfig) -> String,
     onSaveConfig: (UserConfig) -> Unit
 ) {
-    // Clonamos la configuración actual para poder editarla en la pantalla
-    var config by remember { mutableStateOf(currentConfig) }
+    var config by remember(currentConfig) { mutableStateOf(currentConfig) }
 
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
@@ -98,7 +97,7 @@ fun ConfigScreen(
                         }
                         isTesting = true
                         coroutineScope.launch {
-                            val (_, msj) = BinanceApiManager.probarConexion(config.apiKey, config.apiSecret)
+                            val msj = onTestConnection(config)
                             Toast.makeText(context, msj, Toast.LENGTH_LONG).show()
                             isTesting = false
                         }
@@ -164,9 +163,8 @@ fun ConfigScreen(
         // --- BOTÓN GUARDAR ---
         Button(
             onClick = {
-                onSaveConfig(config) // Enviamos la config actualizada a la Activity
+                onSaveConfig(config)
                 Toast.makeText(context, "Configuración Guardada", Toast.LENGTH_SHORT).show()
-                (context as Activity).finish() // Cerramos la pantalla
             },
             modifier = Modifier.fillMaxWidth().height(50.dp),
             colors = ButtonDefaults.buttonColors(containerColor = colorPrimary)

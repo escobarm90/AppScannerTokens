@@ -1,214 +1,147 @@
 package com.mauri.appscannertokens
 
 import android.content.Context
-import com.google.gson.Gson
-import com.google.gson.reflect.TypeToken
-import com.mauri.appscannertokens.AlertManager.agregarLog
-import kotlinx.coroutines.*
-import kotlinx.coroutines.flow.*
-
-data class ActivePosition(
-    val symbol: String,
-    val side: String,
-    val entryPrice: Double,
-    var currentPrice: Double,
-    var initialTp: Double,
-    var dynamicTp: Double,
-    var currentSl: Double,
-    var trailingLevel: Int = 0,
-    var pnlNeto: Double = 0.0,
-    var roePct: Double = 0.0,
-    var isClosed: Boolean = false,
-    val apalancamiento: Int,
-    val orderId: Long
-)
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.launch
+import java.util.concurrent.ConcurrentHashMap
+import kotlin.math.abs
 
 object PositionManager {
-
-    private val _positions = MutableStateFlow<List<ActivePosition>>(emptyList())
-    val positions: StateFlow<List<ActivePosition>> = _positions.asStateFlow()
+    val positions: StateFlow<List<ActivePosition>> = PositionRepository.positions
 
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
-    private val gson = Gson()
+    private val monitorJobs = ConcurrentHashMap<String, Job>()
 
-    private const val PREFS_NAME = "PositionsPrefs"
-    private const val KEY_POSITIONS = "active_positions"
+    fun initialize(context: Context) {
+        AppGraph.initialize(context)
+        PositionRepository.initialize(context)
+        AppGraph.tickerWebSocket.start()
 
-    fun iniciarMonitoreo(
+        PositionRepository.activePositions().forEach { position ->
+            resumeMonitor(context.applicationContext, position)
+        }
+    }
+
+    fun startMonitoring(
         context: Context,
         config: UserConfig,
         symbol: String,
-        senal: String,
+        signal: String,
         entryPrice: Double,
-        tp: Double,
-        sl: Double,
-        apalancamiento: Int,
-        orderId: Long
+        takeProfit: Double,
+        stopLoss: Double,
+        leverage: Int,
+        orderId: Long,
+        quantity: Double
     ) {
-        if (_positions.value.any { it.symbol == symbol && !it.isClosed }) return
+        if (PositionRepository.activePositions().any { it.symbol == symbol }) return
 
-        val pos = ActivePosition(
-            symbol, senal, entryPrice, entryPrice,
-            tp, tp, sl, 0, 0.0, 0.0, false,
-            apalancamiento, orderId
+        val position = ActivePosition(
+            symbol = symbol,
+            side = signal,
+            entryPrice = entryPrice,
+            currentPrice = entryPrice,
+            initialTp = takeProfit,
+            dynamicTp = takeProfit,
+            currentSl = stopLoss,
+            apalancamiento = leverage,
+            orderId = orderId,
+            quantity = quantity
         )
+        PositionRepository.add(position)
+        LogRepository.add("Posicion agregada al monitor: $symbol")
+        launchMonitor(context.applicationContext, config, position, isResume = false)
+    }
 
-        _positions.update { it + pos }
-        guardarEstado(context)
-
+    fun closePositionManual(context: Context, config: UserConfig, symbol: String) {
         scope.launch {
-            vigilarOrden(context, config, pos, false)
+            AppGraph.initialize(context)
+            LogRepository.add("Cierre manual iniciado para $symbol")
+            AppGraph.orderService.cancelOpenOrdersStrictly(config.apiKey, config.apiSecret, symbol)
+
+            val amount = AppGraph.accountService.getPositionAmount(config.apiKey, config.apiSecret, symbol)
+            if (amount == null) {
+                LogRepository.add("No se pudo confirmar cantidad activa en $symbol; no se marca como cerrada.")
+                return@launch
+            }
+
+            if (amount != 0.0) {
+                val exitSide = if (amount > 0) "SELL" else "BUY"
+                AppGraph.orderService.executeGuaranteedClose(
+                    apiKey = config.apiKey,
+                    apiSecret = config.apiSecret,
+                    symbol = symbol,
+                    side = exitSide,
+                    quantity = abs(amount),
+                    marginType = config.tipoMargen
+                )
+                LogRepository.add("$symbol cerrada manualmente.")
+            }
+
+            PositionRepository.update(symbol) { it.copy(isClosed = true) }
         }
     }
 
-    private suspend fun vigilarOrden(
+    fun removePosition(symbol: String) {
+        monitorJobs.remove(symbol)?.cancel()
+        PositionRepository.remove(symbol)
+    }
+
+    private fun resumeMonitor(context: Context, position: ActivePosition) {
+        if (monitorJobs[position.symbol]?.isActive == true) return
+        val config = AppGraph.configRepository.load()
+        scope.launch {
+            val orderStatus = AppGraph.accountService.getOrderStatus(
+                config.apiKey,
+                config.apiSecret,
+                position.symbol,
+                position.orderId
+            )
+            val positionAmount = AppGraph.accountService.getPositionAmount(
+                config.apiKey,
+                config.apiSecret,
+                position.symbol
+            )
+
+            if (positionAmount == 0.0 && orderStatus in listOf("CANCELED", "REJECTED", "EXPIRED")) {
+                PositionRepository.remove(position.symbol)
+                return@launch
+            }
+
+            launchMonitor(
+                context = context,
+                config = config,
+                position = position,
+                isResume = orderStatus == "FILLED" || (positionAmount != null && positionAmount != 0.0)
+            )
+        }
+    }
+
+    private fun launchMonitor(
         context: Context,
         config: UserConfig,
-        pos: ActivePosition,
-        esReanudacion: Boolean
+        position: ActivePosition,
+        isResume: Boolean
     ) {
+        if (monitorJobs[position.symbol]?.isActive == true) return
 
-        val symbol = pos.symbol
-        val isLong = pos.side.uppercase() in listOf("LONG", "BUY")
-        val ladoSalida = if (isLong) "SELL" else "BUY"
-
-        var tp = pos.dynamicTp
-        var sl = pos.currentSl
-
-        val entry = pos.entryPrice
-
-        // ---------- ESPERAR FILLED ----------
-        if (!esReanudacion) {
-            for (i in 1..60) {
-                val estado = BinanceApiManager.obtenerEstadoOrden(
-                    config.apiKey, config.apiSecret, symbol, pos.orderId
-                )
-
-                if (estado == "FILLED") break
-
-                if (estado in listOf("CANCELED", "REJECTED", "EXPIRED")) {
-                    removerPosicion(context, symbol)
-                    return
-                }
-
-                delay(1000)
-            }
-
-            // ---------- CREAR ESCUDOS ----------
-            val tpOk = BinanceApiManager.crearEscudoGarantizado(
-                config.apiKey,
-                config.apiSecret,
-                symbol,
-                ladoSalida,
-                "TAKE_PROFIT_MARKET",
-                tp
-            )
-
-            val slOk = BinanceApiManager.crearEscudoGarantizado(
-                config.apiKey,
-                config.apiSecret,
-                symbol,
-                ladoSalida,
-                "STOP_MARKET",
-                sl
-            )
-
-            if (!tpOk || !slOk) {
-                agregarLog("⚠️ Escudos físicos rechazados → se activa virtual")
-            } else {
-                agregarLog("✅ SL/TP colocados en Binance")
-            }
+        monitorJobs[position.symbol] = scope.launch {
+            PositionMonitor(
+                context = context,
+                config = config,
+                initialPosition = position,
+                accountService = AppGraph.accountService,
+                orderService = AppGraph.orderService,
+                marketDataService = AppGraph.marketDataService,
+                tickerWebSocket = AppGraph.tickerWebSocket,
+                positionRepository = PositionRepository,
+                logRepository = LogRepository,
+                trailingStopEngine = TrailingStopEngine()
+            ).run(isResume)
         }
-
-        // ---------- LOOP TRAILING ----------
-        while (true) {
-            delay(300)
-
-            val posAmt = BinanceApiManager.obtenerCantidadPosicion(
-                config.apiKey, config.apiSecret, symbol
-            ) ?: 0.0
-
-            if (posAmt == 0.0) {
-                marcarComoCerrada(context, symbol)
-                break
-            }
-
-            val precio = BinanceApiManager.preciosWs[symbol]
-                ?: BinanceApiManager.obtenerPrecioActual(symbol)
-
-            if (precio == 0.0) continue
-
-            // ---------- ESCUDO VIRTUAL ----------
-            val hitSL = if (isLong) precio <= sl else precio >= sl
-            val hitTP = if (isLong) precio >= tp else precio <= tp
-
-            if (hitSL || hitTP) {
-                BinanceApiManager.limpiarOrdenesEstrictamente(
-                    config.apiKey, config.apiSecret, symbol
-                )
-
-                BinanceApiManager.ejecutarCierreGarantizado(
-                    config.apiKey, config.apiSecret, symbol,
-                    ladoSalida, kotlin.math.abs(posAmt), config.tipoMargen
-                )
-
-                marcarComoCerrada(context, symbol)
-                break
-            }
-
-            // ---------- TRAILING 70% ----------
-            val distancia = kotlin.math.abs(tp - entry)
-            val progreso = if (isLong)
-                (precio - entry) / distancia
-            else
-                (entry - precio) / distancia
-
-            if (progreso >= 0.70) {
-
-                BinanceApiManager.limpiarOrdenesEstrictamente(
-                    config.apiKey, config.apiSecret, symbol
-                )
-
-                val nuevoSL = if (isLong)
-                    entry + (distancia * 0.5)
-                else
-                    entry - (distancia * 0.5)
-
-                val nuevoTP = if (isLong)
-                    tp + (distancia * 0.3)
-                else
-                    tp - (distancia * 0.3)
-
-                BinanceApiManager.crearEscudoGarantizado(
-                    config.apiKey, config.apiSecret, symbol,
-                    ladoSalida, "STOP_MARKET", nuevoSL
-                )
-
-                BinanceApiManager.crearEscudoGarantizado(
-                    config.apiKey, config.apiSecret, symbol,
-                    ladoSalida, "TAKE_PROFIT_MARKET", nuevoTP
-                )
-
-                tp = nuevoTP
-                sl = nuevoSL
-
-                agregarLog("🔥 Trailing ejecutado en $symbol")
-            }
-        }
-    }
-
-    private fun guardarEstado(context: Context) {
-        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        prefs.edit().putString(KEY_POSITIONS, gson.toJson(_positions.value)).apply()
-    }
-
-    private fun marcarComoCerrada(context: Context, symbol: String) {
-        _positions.update { it.map { p -> if (p.symbol == symbol) p.copy(isClosed = true) else p } }
-        guardarEstado(context)
-    }
-
-    fun removerPosicion(context: Context, symbol: String) {
-        _positions.update { it.filter { p -> p.symbol != symbol } }
-        guardarEstado(context)
     }
 }

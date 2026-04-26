@@ -24,11 +24,9 @@ class ConfigActivity : ComponentActivity() {
                 // 2. Llamamos a la pantalla con los parámetros correctos
                 ConfigScreen(
                     currentConfig = currentConfig,
+                    onTestConnection = { config -> viewModel.probarConexion(config) },
                     onSaveConfig = { configModificada ->
-                        // Guardamos la configuración nueva
                         viewModel.guardarConfiguracion(configModificada)
-
-                        // Cerramos la actividad de configuración para volver atrás
                         finish()
                     }
                 )

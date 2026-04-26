@@ -1,193 +1,153 @@
 package com.mauri.appscannertokens
 
-import android.content.Context
+import android.content.Intent
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.*
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.SecondaryTabRow
+import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
+import androidx.compose.material3.Tab
+import androidx.compose.material3.TabRowDefaults
 import androidx.compose.material3.TabRowDefaults.tabIndicatorOffset
-import androidx.compose.runtime.*
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.core.content.ContextCompat
-import com.google.gson.Gson
+import androidx.lifecycle.viewmodel.compose.viewModel
 import kotlinx.coroutines.launch
 import java.util.Locale
 import kotlin.math.abs
-import android.content.Intent
-import androidx.activity.result.contract.ActivityResultContracts
 
 class MainActivity : ComponentActivity() {
-
-    // --- REGISTRADOR PARA EL PERMISO DE NOTIFICACIONES ---
     private val requestPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
-    ) { isGranted: Boolean ->
-        if (!isGranted) {
-            AlertManager.agregarLog("⚠️ Permiso de notificaciones denegado.")
+    ) { isGranted ->
+        if (!isGranted) LogRepository.add("Permiso de notificaciones denegado.")
+    }
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        requestCriticalPermissions()
+
+        setContent {
+            MaterialTheme {
+                val monitorViewModel: MonitorViewModel = viewModel()
+                MonitorScreen(
+                    viewModel = monitorViewModel,
+                    onOpenConfig = {
+                        startActivity(Intent(this@MainActivity, ConfigActivity::class.java))
+                    },
+                    onExit = {
+                        monitorViewModel.setMotorRunning(false)
+                        finishAffinity()
+                        kotlin.system.exitProcess(0)
+                    }
+                )
+            }
         }
     }
 
-    // --- FUNCIÓN PARA BLINDAR LA APP EN SEGUNDO PLANO ---
-    private fun solicitarPermisosCriticos() {
-        // 1. Pedir permiso de Notificaciones (Requerido en Android 13+)
+    private fun requestCriticalPermissions() {
         if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
             if (checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
                 requestPermissionLauncher.launch(android.Manifest.permission.POST_NOTIFICATIONS)
             }
         }
 
-        // 2. Pedir exención de Ahorro de Batería (Evita el Doze Mode)
         if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
             val powerManager = getSystemService(POWER_SERVICE) as android.os.PowerManager
             if (!powerManager.isIgnoringBatteryOptimizations(packageName)) {
-                val intent = android.content.Intent(android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
-                    data = android.net.Uri.parse("package:$packageName")
-                }
-                startActivity(intent)
+                startActivity(
+                    Intent(android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
+                        data = android.net.Uri.parse("package:$packageName")
+                    }
+                )
             }
         }
     }
-
-    override fun onCreate(savedInstanceState: Bundle?) {
-        super.onCreate(savedInstanceState)
-
-        // Disparamos la solicitud de permisos críticos al abrir la app
-        solicitarPermisosCriticos()
-
-        setContent {
-            MaterialTheme {
-                // Inicializamos la memoria, el caché de posiciones y los WebSockets apenas carga la UI
-                androidx.compose.runtime.LaunchedEffect(Unit) {
-                    AlertManager.inicializar(this@MainActivity)
-                    BinanceApiManager.iniciarWsTickers()
-                    PositionManager.inicializar(this@MainActivity)
-                }
-
-                MonitorScreen(onOpenConfig = {
-                    startActivity(android.content.Intent(this@MainActivity, ConfigActivity::class.java))
-                })
-            }
-        }
-    }
-}
-
-fun cargarConfiguracion(context: android.content.Context): UserConfig {
-    val prefs = context.getSharedPreferences("AppScannerConfig", android.content.Context.MODE_PRIVATE)
-    val jsonGuardado = prefs.getString("config_data", null)
-    return if (jsonGuardado != null) com.google.gson.Gson().fromJson(jsonGuardado, UserConfig::class.java) else UserConfig()
 }
 
 @Composable
-fun MonitorScreen(onOpenConfig: () -> Unit) {
-    val alertas by AlertManager.alertas.collectAsState()
-    val logsConsola by AlertManager.logs.collectAsState()
-    val posicionesActivas by PositionManager.positions.collectAsState()
+fun MonitorScreen(
+    viewModel: MonitorViewModel = viewModel(),
+    onOpenConfig: () -> Unit,
+    onExit: () -> Unit
+) {
+    val alerts by viewModel.alerts.collectAsState()
+    val logs by viewModel.logs.collectAsState()
+    val positions by viewModel.positions.collectAsState()
+    val config by viewModel.config.collectAsState()
+    val walletBalance by viewModel.balance.collectAsState()
+    val isLoadingBalance by viewModel.isLoadingBalance.collectAsState()
+    val isMotorRunning by viewModel.isMotorRunning.collectAsState()
+    val isDebugEnabled by viewModel.isDebugEnabled.collectAsState()
 
-    val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
+    val pagerState = rememberPagerState(pageCount = { 3 })
 
-    var config by remember { mutableStateOf(cargarConfiguracion(context)) }
-    var saldoBilletera by remember { mutableStateOf(0.0) }
-    var isLoadingSaldo by remember { mutableStateOf(false) }
-
-    val colorFondo = Color(0xFF0d1117)
-    val colorCard = Color(0xFF161b22)
-    val colorBorde = Color(0xFF30363d)
-    val colorPrimary = Color(0xFF58a6ff)
-
-    var isMotorRunning by remember { mutableStateOf(TradingScannerService.isRunning) }
-    var isDebugEnabled by remember { mutableStateOf(TradingScannerService.isDebugMode) }
-
-    // Configuración del Pager (Pestañas Deslizables)
+    val background = Color(0xFF0d1117)
+    val card = Color(0xFF161b22)
+    val border = Color(0xFF30363d)
+    val primary = Color(0xFF58a6ff)
     val tabs = listOf("Oportunidades", "Posiciones", "Consola")
-    val pagerState = rememberPagerState(pageCount = { tabs.size })
-
-    fun actualizarSaldo() {
-        if (config.apiKey.isNotEmpty() && config.apiSecret.isNotEmpty()) {
-            isLoadingSaldo = true
-            coroutineScope.launch {
-                saldoBilletera = BinanceApiManager.obtenerSaldoUSDT(config.apiKey, config.apiSecret)
-                isLoadingSaldo = false
-            }
-        }
-    }
 
     LaunchedEffect(Unit) {
-        AlertManager.inicializar(context)
-        BinanceApiManager.iniciarWsTickers() // Prende la ametralladora de precios
-        PositionManager.inicializar(context) // Resucita posiciones huérfanas
-        actualizarSaldo()
+        viewModel.reloadConfig()
+        viewModel.refreshBalance()
     }
 
-    Column(modifier = Modifier.fillMaxSize().background(colorFondo).padding(top = 16.dp)) {
+    Column(modifier = Modifier.fillMaxSize().background(background).padding(top = 16.dp)) {
+        Header(
+            primary = primary,
+            card = card,
+            border = border,
+            onOpenConfig = onOpenConfig,
+            onExit = onExit
+        )
 
-        // --- HEADER FIJO ---
-        // --- HEADER FIJO ---
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text("📡 Dashboard", color = colorPrimary, fontSize = 24.sp, fontWeight = FontWeight.Bold)
-
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                // --- BOTÓN DE APAGADO TOTAL (KILL SWITCH) ---
-                Button(
-                    onClick = {
-                        // 1. Detenemos el motor en segundo plano
-                        isMotorRunning = false
-                        TradingScannerService.isRunning = false
-                        val intent = Intent(context, TradingScannerService::class.java)
-                        context.stopService(intent)
-
-                        // 2. Cerramos la actividad y matamos el proceso
-                        val activity = context as? android.app.Activity
-                        activity?.finishAffinity()
-                        kotlin.system.exitProcess(0)
-                    },
-                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFda3633)),
-                    shape = RoundedCornerShape(8.dp),
-                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp)
-                ) {
-                    Text("🛑 Salir", color = Color.White, fontWeight = FontWeight.Bold)
-                }
-
-                // --- BOTÓN DE PARÁMETROS ORIGINAL ---
-                Button(
-                    onClick = onOpenConfig,
-                    colors = ButtonDefaults.buttonColors(containerColor = colorCard),
-                    shape = RoundedCornerShape(8.dp),
-                    border = androidx.compose.foundation.BorderStroke(1.dp, colorBorde),
-                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp)
-                ) {
-                    Text("⚙️ Parámetros", color = Color.White, fontWeight = FontWeight.SemiBold)
-                }
-            }
-        }
-
-// --- MENÚ DE NAVEGACIÓN (TABS) ---
         SecondaryTabRow(
             selectedTabIndex = pagerState.currentPage,
-            containerColor = colorFondo,
-            contentColor = colorPrimary,
+            containerColor = background,
+            contentColor = primary,
             indicator = {
                 TabRowDefaults.SecondaryIndicator(
                     Modifier.tabIndicatorOffset(pagerState.currentPage),
-                    color = colorPrimary
+                    color = primary
                 )
             }
         ) {
@@ -198,7 +158,7 @@ fun MonitorScreen(onOpenConfig: () -> Unit) {
                     text = {
                         Text(
                             text = title,
-                            color = if (pagerState.currentPage == index) colorPrimary else Color.Gray,
+                            color = if (pagerState.currentPage == index) primary else Color.Gray,
                             fontWeight = FontWeight.Bold,
                             fontSize = 12.sp
                         )
@@ -207,206 +167,341 @@ fun MonitorScreen(onOpenConfig: () -> Unit) {
             }
         }
 
-        // --- CONTENIDO DESLIZABLE (PAGER) ---
-        HorizontalPager(
-            state = pagerState,
-            modifier = Modifier.fillMaxSize()
-        ) { page ->
+        HorizontalPager(state = pagerState, modifier = Modifier.fillMaxSize()) { page ->
             when (page) {
-                // ==========================================
-                // PESTAÑA 0: OPORTUNIDADES Y MOTOR
-                // ==========================================
-                0 -> {
-                    Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
-                        // BILLETERA
-                        Card(
-                            modifier = Modifier.fillMaxWidth(),
-                            colors = CardDefaults.cardColors(containerColor = Color(0xFF1a2b22)),
-                            border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF2ea043))
-                        ) {
-                            Row(
-                                modifier = Modifier.fillMaxWidth().padding(16.dp),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Column {
-                                    Text("💰 SALDO DISPONIBLE (USDT)", color = Color.LightGray, fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                                    if (isLoadingSaldo) {
-                                        Text("Consultando...", color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold)
-                                    } else {
-                                        Text(text = "$${String.format(Locale.US, "%.2f", saldoBilletera)}", color = Color(0xFF2ea043), fontSize = 28.sp, fontWeight = FontWeight.ExtraBold)
-                                    }
-                                }
-                                IconButton(onClick = { actualizarSaldo() }) { Text("🔄", fontSize = 20.sp) }
-                            }
-                        }
+                0 -> OpportunitiesPage(
+                    alerts = alerts,
+                    config = config,
+                    walletBalance = walletBalance,
+                    isLoadingBalance = isLoadingBalance,
+                    isMotorRunning = isMotorRunning,
+                    primary = primary,
+                    card = card,
+                    border = border,
+                    onRefresh = {
+                        viewModel.reloadConfig()
+                        viewModel.refreshBalance()
+                    },
+                    onMotorChanged = viewModel::setMotorRunning,
+                    onExecuteLimit = viewModel::executeLimit,
+                    onExecuteMarket = viewModel::executeMarket,
+                    onDismiss = viewModel::removeAlert
+                )
 
-                        Spacer(modifier = Modifier.height(12.dp))
+                1 -> PositionsPage(
+                    positions = positions,
+                    card = card,
+                    border = border,
+                    onClosePosition = viewModel::closePosition
+                )
 
-                        // SWITCH MOTOR
-                        Card(modifier = Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = colorCard), border = androidx.compose.foundation.BorderStroke(1.dp, colorBorde)) {
-                            Row(modifier = Modifier.fillMaxWidth().padding(16.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                                Column {
-                                    Text("🚀 Motor de Escaneo", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 16.sp)
-                                    Text(if (isMotorRunning) "Activo - Analizando Binance" else "Motor Detenido", color = if (isMotorRunning) Color(0xFF2ea043) else Color.Gray, fontSize = 12.sp)
-                                }
-                                Switch(
-                                    checked = isMotorRunning,
-                                    onCheckedChange = {
-                                        isMotorRunning = it; TradingScannerService.isRunning = it
-                                        val intent = Intent(context, TradingScannerService::class.java)
-                                        if (it) ContextCompat.startForegroundService(context, intent) else context.stopService(intent)
-                                    },
-                                    colors = SwitchDefaults.colors(checkedThumbColor = Color(0xFF2ea043), checkedTrackColor = Color(0xFF2ea043).copy(alpha = 0.5f))
-                                )
-                            }
-                        }
+                2 -> ConsolePage(
+                    logs = logs,
+                    isDebugEnabled = isDebugEnabled,
+                    card = card,
+                    border = border,
+                    onDebugChanged = viewModel::setDebugEnabled
+                )
+            }
+        }
+    }
+}
 
-                        Spacer(modifier = Modifier.height(16.dp))
+@Composable
+private fun Header(
+    primary: Color,
+    card: Color,
+    border: Color,
+    onOpenConfig: () -> Unit,
+    onExit: () -> Unit
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text("Dashboard", color = primary, fontSize = 24.sp, fontWeight = FontWeight.Bold)
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Button(
+                onClick = onExit,
+                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFda3633)),
+                shape = RoundedCornerShape(8.dp),
+                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp)
+            ) {
+                Text("Salir", color = Color.White, fontWeight = FontWeight.Bold)
+            }
+            Button(
+                onClick = onOpenConfig,
+                colors = ButtonDefaults.buttonColors(containerColor = card),
+                shape = RoundedCornerShape(8.dp),
+                border = androidx.compose.foundation.BorderStroke(1.dp, border),
+                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp)
+            ) {
+                Text("Parametros", color = Color.White, fontWeight = FontWeight.SemiBold)
+            }
+        }
+    }
+}
 
-                        // LISTA DE ALERTAS
-                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                            Text("ÚLTIMAS OPORTUNIDADES", color = Color.Gray, fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                            TextButton(onClick = { config = cargarConfiguracion(context); actualizarSaldo() }) {
-                                Text("🔄 Refrescar Config", color = colorPrimary, fontSize = 10.sp)
-                            }
-                        }
+@Composable
+private fun OpportunitiesPage(
+    alerts: List<AlertData>,
+    config: UserConfig,
+    walletBalance: Double,
+    isLoadingBalance: Boolean,
+    isMotorRunning: Boolean,
+    primary: Color,
+    card: Color,
+    border: Color,
+    onRefresh: () -> Unit,
+    onMotorChanged: (Boolean) -> Unit,
+    onExecuteLimit: suspend (AlertExecutionRequest) -> String,
+    onExecuteMarket: suspend (AlertExecutionRequest) -> String,
+    onDismiss: (AlertData) -> Unit
+) {
+    Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
+        WalletCard(
+            balance = walletBalance,
+            isLoading = isLoadingBalance,
+            onRefresh = onRefresh
+        )
 
-                        Box(modifier = Modifier.fillMaxSize()) {
-                            if (alertas.isEmpty()) {
-                                Text(if (isMotorRunning) "Esperando cruces perfectos..." else "Enciende el motor arriba.", color = Color.Gray, modifier = Modifier.align(Alignment.Center))
-                            } else {
-                                LazyColumn(modifier = Modifier.fillMaxSize()) {
-                                    items(alertas) { alerta ->
-                                        AlertCard(alerta = alerta, config = config, billetera = saldoBilletera, onDismiss = { AlertManager.removerAlerta(context, alerta) })                                    }
-                                }
-                            }
-                        }
+        Spacer(modifier = Modifier.height(12.dp))
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(containerColor = card),
+            border = androidx.compose.foundation.BorderStroke(1.dp, border)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(16.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column {
+                    Text("Motor de Escaneo", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                    Text(
+                        if (isMotorRunning) "Activo - Analizando Binance" else "Motor detenido",
+                        color = if (isMotorRunning) Color(0xFF2ea043) else Color.Gray,
+                        fontSize = 12.sp
+                    )
+                }
+                Switch(
+                    checked = isMotorRunning,
+                    onCheckedChange = onMotorChanged,
+                    colors = SwitchDefaults.colors(
+                        checkedThumbColor = Color(0xFF2ea043),
+                        checkedTrackColor = Color(0xFF2ea043).copy(alpha = 0.5f)
+                    )
+                )
+            }
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text("ULTIMAS OPORTUNIDADES", color = Color.Gray, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+            TextButton(onClick = onRefresh) {
+                Text("Refrescar Config", color = primary, fontSize = 10.sp)
+            }
+        }
+
+        Box(modifier = Modifier.fillMaxSize()) {
+            if (alerts.isEmpty()) {
+                Text(
+                    if (isMotorRunning) "Esperando cruces perfectos..." else "Enciende el motor arriba.",
+                    color = Color.Gray,
+                    modifier = Modifier.align(Alignment.Center)
+                )
+            } else {
+                LazyColumn(modifier = Modifier.fillMaxSize()) {
+                    items(alerts) { alert ->
+                        AlertCard(
+                            alerta = alert,
+                            config = config,
+                            billetera = walletBalance,
+                            onExecuteLimit = onExecuteLimit,
+                            onExecuteMarket = onExecuteMarket,
+                            onDismiss = { onDismiss(alert) }
+                        )
                     }
                 }
+            }
+        }
+    }
+}
 
-                // ==========================================
-                // PESTAÑA 1: POSICIONES EN VIVO
-                // ==========================================
-                1 -> {
-                    Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
-                        Text("📈 POSICIONES ACTIVAS (${posicionesActivas.size})", color = Color(0xFFe3b341), fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                        Spacer(modifier = Modifier.height(12.dp))
+@Composable
+private fun WalletCard(balance: Double, isLoading: Boolean, onRefresh: () -> Unit) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = Color(0xFF1a2b22)),
+        border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF2ea043))
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(16.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column {
+                Text("SALDO DISPONIBLE (USDT)", color = Color.LightGray, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                Text(
+                    text = if (isLoading) "Consultando..." else "${'$'}${String.format(Locale.US, "%.2f", balance)}",
+                    color = if (isLoading) Color.White else Color(0xFF2ea043),
+                    fontSize = if (isLoading) 20.sp else 28.sp,
+                    fontWeight = FontWeight.ExtraBold
+                )
+            }
+            IconButton(onClick = onRefresh) {
+                Text("R", fontSize = 20.sp, color = Color.White)
+            }
+        }
+    }
+}
 
-                        if (posicionesActivas.isEmpty()) {
-                            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                                Text("No hay posiciones abiertas.", color = Color.Gray)
-                            }
-                        } else {
-                            LazyColumn(modifier = Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                                items(posicionesActivas) { pos ->
-                                    val isGanancia = pos.pnlNeto >= 0
-                                    val colorEstado = if (isGanancia) Color(0xFF2ea043) else Color(0xFFda3633)
+@Composable
+private fun PositionsPage(
+    positions: List<ActivePosition>,
+    card: Color,
+    border: Color,
+    onClosePosition: (String) -> Unit
+) {
+    Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
+        Text("POSICIONES ACTIVAS (${positions.size})", color = Color(0xFFe3b341), fontSize = 12.sp, fontWeight = FontWeight.Bold)
+        Spacer(modifier = Modifier.height(12.dp))
 
-                                    Card(
-                                        modifier = Modifier.fillMaxWidth(),
-                                        colors = CardDefaults.cardColors(containerColor = if (pos.isClosed) Color(0xFF30363d) else colorCard),
-                                        border = androidx.compose.foundation.BorderStroke(1.dp, if (pos.isClosed) Color.Gray else colorEstado)
-                                    ) {
-                                        Column(modifier = Modifier.padding(16.dp).fillMaxWidth(), verticalArrangement = Arrangement.SpaceBetween) {
-                                            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                                                Text("${pos.symbol} [${pos.side}]", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 18.sp)
-                                                Text("Nivel TS: ${pos.trailingLevel}", color = Color.Gray, fontSize = 12.sp)
-                                            }
-
-                                            Spacer(modifier = Modifier.height(8.dp))
-
-                                            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                                                Column {
-                                                    Text("Entrada: ${String.format(Locale.US, "%.5f", pos.entryPrice)}", color = Color.LightGray, fontSize = 14.sp)
-                                                    Text("Actual:  ${String.format(Locale.US, "%.5f", pos.currentPrice)}", color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Bold)
-                                                }
-                                                Column(horizontalAlignment = Alignment.End) {
-                                                    Text(String.format(Locale.US, "%.2f%%", pos.roePct), color = colorEstado, fontWeight = FontWeight.Bold, fontSize = 20.sp)
-                                                    Text(String.format(Locale.US, "%.2f USDT", pos.pnlNeto), color = colorEstado, fontSize = 14.sp)
-                                                }
-                                            }
-
-                                            Spacer(modifier = Modifier.height(12.dp))
-
-                                            if (pos.isClosed) {
-                                                Text("POSICIÓN CERRADA", color = Color.Gray, fontWeight = FontWeight.Bold, modifier = Modifier.align(Alignment.CenterHorizontally))
-                                            } else {
-                                                val distTotal = abs(pos.dynamicTp - pos.entryPrice)
-                                                val progreso = if (distTotal > 0) abs(pos.currentPrice - pos.entryPrice) / distTotal else 0.0
-                                                LinearProgressIndicator(
-                                                    progress = { progreso.toFloat().coerceIn(0f, 1f) },
-                                                    modifier = Modifier.fillMaxWidth().height(6.dp),
-                                                    color = colorEstado, trackColor = colorBorde
-                                                )
-
-                                                Spacer(modifier = Modifier.height(12.dp))
-
-                                                // --- NUEVO BOTÓN: CIERRE MANUAL 100% ---
-                                                Button(
-                                                    onClick = {
-                                                        PositionManager.cerrarPosicionManual(context, config, pos.symbol)
-                                                    },
-                                                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFda3633)), // Rojo alerta
-                                                    modifier = Modifier.fillMaxWidth(),
-                                                    shape = RoundedCornerShape(6.dp)
-                                                ) {
-                                                    Text("CERRAR POSICIÓN AL MARKET", color = Color.White, fontWeight = FontWeight.Bold)
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
+        if (positions.isEmpty()) {
+            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                Text("No hay posiciones abiertas.", color = Color.Gray)
+            }
+        } else {
+            LazyColumn(modifier = Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                items(positions) { position ->
+                    PositionCard(
+                        position = position,
+                        card = card,
+                        border = border,
+                        onClosePosition = onClosePosition
+                    )
                 }
+            }
+        }
+    }
+}
 
-                // ==========================================
-                // PESTAÑA 2: CONSOLA DEBUG
-                // ==========================================
-                2 -> {
-                    Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
+@Composable
+private fun PositionCard(
+    position: ActivePosition,
+    card: Color,
+    border: Color,
+    onClosePosition: (String) -> Unit
+) {
+    val isProfit = position.pnlNeto >= 0
+    val statusColor = if (isProfit) Color(0xFF2ea043) else Color(0xFFda3633)
 
-                        // SWITCH MODO DEBUG
-                        Card(modifier = Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = colorCard), border = androidx.compose.foundation.BorderStroke(1.dp, colorBorde)) {
-                            Row(modifier = Modifier.fillMaxWidth().padding(16.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                                Column {
-                                    Text("🐛 Modo Debug", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 16.sp)
-                                    Text("Mostrar cálculos en pantalla", color = Color.Gray, fontSize = 12.sp)
-                                }
-                                Switch(
-                                    checked = isDebugEnabled,
-                                    onCheckedChange = { isDebugEnabled = it; TradingScannerService.isDebugMode = it },
-                                    colors = SwitchDefaults.colors(checkedThumbColor = Color(0xFFe3b341), checkedTrackColor = Color(0xFFe3b341).copy(alpha = 0.5f))
-                                )
-                            }
-                        }
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = if (position.isClosed) Color(0xFF30363d) else card),
+        border = androidx.compose.foundation.BorderStroke(1.dp, if (position.isClosed) Color.Gray else statusColor)
+    ) {
+        Column(modifier = Modifier.padding(16.dp).fillMaxWidth()) {
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                Text("${position.symbol} [${position.side}]", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 18.sp)
+                Text("Nivel TS: ${position.trailingLevel}", color = Color.Gray, fontSize = 12.sp)
+            }
 
-                        Spacer(modifier = Modifier.height(16.dp))
-                        Text("TERMINAL EN VIVO", color = Color(0xFFe3b341), fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                        Spacer(modifier = Modifier.height(8.dp))
+            Spacer(modifier = Modifier.height(8.dp))
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                Column {
+                    Text("Entrada: ${String.format(Locale.US, "%.5f", position.entryPrice)}", color = Color.LightGray, fontSize = 14.sp)
+                    Text("Actual: ${String.format(Locale.US, "%.5f", position.currentPrice)}", color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                }
+                Column(horizontalAlignment = Alignment.End) {
+                    Text(String.format(Locale.US, "%.2f%%", position.roePct), color = statusColor, fontWeight = FontWeight.Bold, fontSize = 20.sp)
+                    Text(String.format(Locale.US, "%.2f USDT", position.pnlNeto), color = statusColor, fontSize = 14.sp)
+                }
+            }
 
-                        // TERMINAL NEGRA
-                        Card(
-                            modifier = Modifier.fillMaxSize(),
-                            colors = CardDefaults.cardColors(containerColor = Color.Black),
-                            border = androidx.compose.foundation.BorderStroke(1.dp, colorBorde)
-                        ) {
-                            LazyColumn(modifier = Modifier.fillMaxSize().padding(8.dp), reverseLayout = true) {
-                                items(logsConsola) { logMsg ->
-                                    Text(
-                                        text = logMsg,
-                                        color = Color(0xFF00FF00),
-                                        fontFamily = FontFamily.Monospace,
-                                        fontSize = 10.sp,
-                                        lineHeight = 14.sp
-                                    )
-                                    Spacer(modifier = Modifier.height(8.dp))
-                                }
-                            }
-                        }
-                    }
+            Spacer(modifier = Modifier.height(12.dp))
+            if (position.isClosed) {
+                Text("POSICION CERRADA", color = Color.Gray, fontWeight = FontWeight.Bold, modifier = Modifier.align(Alignment.CenterHorizontally))
+            } else {
+                val totalDistance = abs(position.dynamicTp - position.entryPrice)
+                val progress = if (totalDistance > 0) abs(position.currentPrice - position.entryPrice) / totalDistance else 0.0
+                LinearProgressIndicator(
+                    progress = { progress.toFloat().coerceIn(0f, 1f) },
+                    modifier = Modifier.fillMaxWidth().height(6.dp),
+                    color = statusColor,
+                    trackColor = border
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+                Button(
+                    onClick = { onClosePosition(position.symbol) },
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFda3633)),
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(6.dp)
+                ) {
+                    Text("CERRAR POSICION AL MARKET", color = Color.White, fontWeight = FontWeight.Bold)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ConsolePage(
+    logs: List<String>,
+    isDebugEnabled: Boolean,
+    card: Color,
+    border: Color,
+    onDebugChanged: (Boolean) -> Unit
+) {
+    Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(containerColor = card),
+            border = androidx.compose.foundation.BorderStroke(1.dp, border)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(16.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column {
+                    Text("Modo Debug", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                    Text("Mostrar calculos en pantalla", color = Color.Gray, fontSize = 12.sp)
+                }
+                Switch(
+                    checked = isDebugEnabled,
+                    onCheckedChange = onDebugChanged,
+                    colors = SwitchDefaults.colors(
+                        checkedThumbColor = Color(0xFFe3b341),
+                        checkedTrackColor = Color(0xFFe3b341).copy(alpha = 0.5f)
+                    )
+                )
+            }
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+        Text("TERMINAL EN VIVO", color = Color(0xFFe3b341), fontSize = 12.sp, fontWeight = FontWeight.Bold)
+        Spacer(modifier = Modifier.height(8.dp))
+        Card(
+            modifier = Modifier.fillMaxSize(),
+            colors = CardDefaults.cardColors(containerColor = Color.Black),
+            border = androidx.compose.foundation.BorderStroke(1.dp, border)
+        ) {
+            LazyColumn(modifier = Modifier.fillMaxSize().padding(8.dp), reverseLayout = true) {
+                items(logs) { log ->
+                    Text(
+                        text = log,
+                        color = Color(0xFF00FF00),
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 10.sp,
+                        lineHeight = 14.sp
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
                 }
             }
         }
