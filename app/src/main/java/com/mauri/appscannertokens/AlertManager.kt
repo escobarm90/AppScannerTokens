@@ -11,8 +11,8 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 
 object AlertManager {
-    private val _alertas = MutableStateFlow<List<TradingScannerService.AlertData>>(emptyList())
-    val alertas: StateFlow<List<TradingScannerService.AlertData>> = _alertas.asStateFlow()
+    private val _alertas = MutableStateFlow<List<AlertData>>(emptyList())
+    val alertas: StateFlow<List<AlertData>> = _alertas.asStateFlow()
 
     private val _logs = MutableStateFlow<List<String>>(emptyList())
     val logs: StateFlow<List<String>> = _logs.asStateFlow()
@@ -23,13 +23,14 @@ object AlertManager {
     fun inicializar(context: Context) {
         val json = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getString("lista", null)
         if (json != null) {
-            val type = object : TypeToken<List<TradingScannerService.AlertData>>() {}.type
+            val type = object : TypeToken<List<AlertData>>() {}.type
             _alertas.value = gson.fromJson(json, type)
         }
     }
 
-    fun agregarAlerta(context: Context, alerta: TradingScannerService.AlertData) {
-        // 1. Sincronizamos la memoria con el disco duro por si el servicio 
+    // Corregido: Ahora solo recibe AlertData
+    fun agregarAlerta(context: Context, alerta: AlertData) {
+        // 1. Sincronizamos la memoria con el disco duro por si el servicio
         // está corriendo en segundo plano sin la interfaz abierta.
         if (_alertas.value.isEmpty()) {
             inicializar(context)
@@ -51,7 +52,7 @@ object AlertManager {
             context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit {
                 putString("lista", gson.toJson(tope))
             }
-                
+
             tope
         }
 
@@ -61,8 +62,9 @@ object AlertManager {
             RingtoneManager.getRingtone(context, uri).play()
         } catch (_: Exception) {}
     }
-    
-    fun removerAlerta(context: Context, alerta: TradingScannerService.AlertData) {
+
+    // Corregido: Ahora solo recibe AlertData
+    fun removerAlerta(context: Context, alerta: AlertData) {
         _alertas.update { actual ->
             val nueva = actual.filter { it != alerta }
             context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit {

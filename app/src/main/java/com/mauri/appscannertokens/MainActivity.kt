@@ -28,10 +28,6 @@ import kotlinx.coroutines.launch
 import java.util.Locale
 import kotlin.math.abs
 import android.content.Intent
-import android.net.Uri
-import android.os.Build
-import android.os.PowerManager
-import android.provider.Settings
 import androidx.activity.result.contract.ActivityResultContracts
 
 class MainActivity : ComponentActivity() {

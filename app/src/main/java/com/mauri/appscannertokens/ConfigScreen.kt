@@ -126,6 +126,9 @@ fun ConfigScreen(
                 NumberStepper("% de Billetera por Trade", config.porcentajeInversion, 1.0, 1.0) {
                     config = config.copy(porcentajeInversion = it)
                 }
+                NumberStepper("% Riesgo Máx. de Billetera", config.riesgoMaximoBilletera, 0.5, 0.5) {
+                    config = config.copy(riesgoMaximoBilletera = it)
+                }
                 NumberStepper("Multiplicador Take Profit", config.multiplicadorTp, 0.1, 0.1) {
                     config = config.copy(multiplicadorTp = it)
                 }
@@ -143,14 +146,15 @@ fun ConfigScreen(
                 Text("📈 Filtros Técnicos", color = Color.White, fontWeight = FontWeight.Bold)
                 Spacer(modifier = Modifier.height(12.dp))
 
-                NumberStepper("Mínimo Ratio Volumen", config.minRatioVol, 0.1, 0.1) {
-                    config = config.copy(minRatioVol = it)
+                NumberStepper("Mínimo Ratio Volumen", config.volumenRatioMinimo, 0.1, 0.1) {
+                    config = config.copy(volumenRatioMinimo = it)
                 }
-                NumberStepper("Volatilidad Mínima ATR (%)", config.minVolatilidadPct, 0.05, 0.05) {
-                    config = config.copy(minVolatilidadPct = it)
+                NumberStepper("Volatilidad Mínima ATR (%)", config.atrMinimo, 0.05, 0.05) {
+                    config = config.copy(atrMinimo = it)
                 }
-                NumberStepper("Spread Máximo Permitido (%)", config.maxSpreadPct, 0.05, 0.05) {
-                    config = config.copy(maxSpreadPct = it)
+                // Ajustado a 0.01 para mayor precisión en el spread
+                NumberStepper("Spread Máximo Permitido (%)", config.spreadMaximo, 0.01, 0.01) {
+                    config = config.copy(spreadMaximo = it)
                 }
             }
         }

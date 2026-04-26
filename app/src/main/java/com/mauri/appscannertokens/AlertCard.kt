@@ -1,264 +1,273 @@
 package com.mauri.appscannertokens
 
-import android.widget.Toast
-import androidx.compose.foundation.background
-import androidx.compose.foundation.border
-import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.*
-import androidx.compose.runtime.*
-import androidx.compose.ui.Alignment
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
-import kotlinx.coroutines.launch
-import java.text.SimpleDateFormat
-import java.util.*
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import okhttp3.FormBody
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import org.json.JSONObject
+import java.math.BigDecimal
+import javax.crypto.Mac
+import javax.crypto.spec.SecretKeySpec
+import com.google.gson.JsonParser
 
-@Composable
-fun AlertCard(
-    alerta: TradingScannerService.AlertData,
-    config: UserConfig,
-    billetera: Double,
-    onDismiss: () -> Unit
-) {
-    val context = LocalContext.current
-    val coroutineScope = rememberCoroutineScope()
+object BinanceApiManager {
 
-    var porcentajeUsado by remember { mutableFloatStateOf(30f) }
-    var isCruzado by remember { mutableStateOf(false) }
-    val tipoMargen = if (isCruzado) "CROSSED" else "ISOLATED"
-    var isEjecutando by remember { mutableStateOf(false) }
+    private val client = OkHttpClient()
 
-    val colorFondo = Color(0xFF161b22)
-    val colorBorde = Color(0xFF30363d)
-    val colorGreen = Color(0xFF2ea043)
-    val colorRed = Color(0xFFda3633)
-    val colorCyan = Color(0xFF58a6ff)
-    val colorYellow = Color(0xFFe3b341)
+    private val precisionCache = mutableMapOf<String, Pair<Int, Int>>()
 
-    val formatter = SimpleDateFormat("HH:mm:ss", Locale.getDefault())
-    val horaStr = formatter.format(Date(alerta.timestamp))
+    // =========================
+    // FIRMA HMAC
+    // =========================
+    private fun crearFirma(data: String, secret: String): String {
+        val mac = Mac.getInstance("HmacSHA256")
+        val secretKey = SecretKeySpec(secret.toByteArray(), "HmacSHA256")
+        mac.init(secretKey)
+        return mac.doFinal(data.toByteArray())
+            .joinToString("") { "%02x".format(it) }
+    }
 
-    val margenDeseado = if (billetera > 0) billetera * (porcentajeUsado / 100.0) else 0.0
-    var nominalCalculado = margenDeseado * config.apalancamiento
-    val distanciaTpPct = if (alerta.precio > 0) kotlin.math.abs(alerta.tp - alerta.precio) / alerta.precio else 0.0
-    val distSlAbsoluta = kotlin.math.abs(alerta.sl - alerta.precio)
+    // =========================
+    // OBTENER PRECISIONES
+    // =========================
+    suspend fun obtenerPrecisiones(symbol: String): Pair<Int, Int> =
+        withContext(Dispatchers.IO) {
 
-    var margenRealUsar = margenDeseado
-    var isRiesgoAlto = false
+            if (precisionCache.containsKey(symbol)) {
+                return@withContext precisionCache[symbol]!!
+            }
 
-    // --- REPLICA EXACTA DEL SCRIPT DE PYTHON: Blindaje del 4% ---
-    if (distSlAbsoluta > 0 && alerta.precio > 0 && billetera > 0) {
-        val cantidadTokensTest = nominalCalculado / alerta.precio
-        val perdidaPotencial = distSlAbsoluta * cantidadTokensTest
-        val riesgoMaximoPermitido = billetera * 0.04 // Límite máximo: 4% de la cuenta
+            try {
+                val request = Request.Builder()
+                    .url("https://fapi.binance.com/fapi/v1/exchangeInfo")
+                    .get()
+                    .build()
 
-        if (perdidaPotencial > riesgoMaximoPermitido) {
-            val cantidadSegura = riesgoMaximoPermitido / distSlAbsoluta
-            nominalCalculado = cantidadSegura * alerta.precio
-            margenRealUsar = nominalCalculado / config.apalancamiento
-            isRiesgoAlto = true // Disparamos alerta visual
+                client.newCall(request).execute().use { response ->
+                    val body = response.body?.string() ?: return@use
+
+                    val json = JsonParser.parseString(body).asJsonObject
+                    val symbols = json.getAsJsonArray("symbols")
+
+                    for (i in 0 until symbols.size()) {
+                        val obj = symbols[i].asJsonObject
+                        val sym = obj.get("symbol").asString
+                        val qtyPrec = obj.get("quantityPrecision").asInt
+                        val pricePrec = obj.get("pricePrecision").asInt
+
+                        precisionCache[sym] = Pair(qtyPrec, pricePrec)
+                    }
+                }
+            } catch (_: Exception) {
+            }
+
+            return@withContext precisionCache[symbol] ?: Pair(3, 4)
+        }
+
+    // =========================
+    // CREAR ESCUDO (SL / TP)
+    // =========================
+    suspend fun crearEscudoGarantizado(
+        apiKey: String,
+        apiSecret: String,
+        symbol: String,
+        side: String,
+        type: String,
+        stopPrice: Double
+    ): Boolean = withContext(Dispatchers.IO) {
+
+        try {
+            val precisiones = obtenerPrecisiones(symbol)
+            val pricePrec = precisiones.second
+
+            val priceStr = BigDecimal.valueOf(stopPrice)
+                .setScale(pricePrec, java.math.RoundingMode.HALF_UP)
+                .stripTrailingZeros()
+                .toPlainString()
+
+            val ts = System.currentTimeMillis()
+
+            val query = "symbol=$symbol&side=$side&type=$type&stopPrice=$priceStr" +
+                    "&closePosition=true&workingType=MARK_PRICE" +
+                    "&recvWindow=60000&timestamp=$ts"
+
+            val form = FormBody.Builder()
+                .add("symbol", symbol)
+                .add("side", side)
+                .add("type", type)
+                .add("stopPrice", priceStr)
+                .add("closePosition", "true")
+                .add("workingType", "MARK_PRICE")
+                .add("recvWindow", "60000")
+                .add("timestamp", ts.toString())
+                .add("signature", crearFirma(query, apiSecret))
+                .build()
+
+            val request = Request.Builder()
+                .url("https://fapi.binance.com/fapi/v1/order")
+                .post(form)
+                .addHeader("X-MBX-APIKEY", apiKey)
+                .build()
+
+            client.newCall(request).execute().use { response ->
+
+                val body = response.body?.string() ?: ""
+
+                return@withContext if (response.isSuccessful) {
+                    AlertManager.agregarLog("✅ Escudo $type colocado en $symbol")
+                    true
+                } else {
+                    val json = JSONObject(body)
+                    val msg = json.optString("msg", "Error desconocido")
+                    val code = json.optInt("code", 0)
+
+                    AlertManager.agregarLog("❌ Binance error ($type): $msg ($code)")
+
+                    false
+                }
+            }
+
+        } catch (e: Exception) {
+            AlertManager.agregarLog("❌ Error red escudo: ${e.message}")
+            return@withContext false
         }
     }
-    val pnlBrutoCalculado = nominalCalculado * distanciaTpPct
-    val roeCalculado = distanciaTpPct * config.apalancamiento * 100.0
 
-    // Cálculo de comisiones (Estimamos 0.05% Taker para apertura y 0.05% para cierre)
-    val feeAperturaEst = nominalCalculado * 0.0005
-    val feeCierreEst = nominalCalculado * 0.0005
-    val totalFeesEst = feeAperturaEst + feeCierreEst
-    val pnlNetoCalculado = pnlBrutoCalculado - totalFeesEst
+    // =========================
+    // PRECIO ACTUAL
+    // =========================
+    suspend fun obtenerPrecioActual(symbol: String): Double =
+        withContext(Dispatchers.IO) {
+            try {
+                val request = Request.Builder()
+                    .url("https://fapi.binance.com/fapi/v1/ticker/price?symbol=$symbol")
+                    .build()
 
-    Card(
-        modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
-        colors = CardDefaults.cardColors(containerColor = colorFondo),
-        shape = RoundedCornerShape(8.dp),
-        border = androidx.compose.foundation.BorderStroke(1.dp, colorBorde)
-    ) {
-        Column(modifier = Modifier.padding(16.dp)) {
-            // --- HEADER ---
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                Column {
-                    Text("🪙 ${alerta.symbol}", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 20.sp)
-                    Text("🕒 $horaStr | Apalancado x${config.apalancamiento}", color = Color.Gray, fontSize = 12.sp)
+                client.newCall(request).execute().use { response ->
+                    if (response.isSuccessful) {
+                        val json = JsonParser.parseString(
+                            response.body?.string() ?: ""
+                        ).asJsonObject
+
+                        return@withContext json.get("price").asDouble
+                    }
                 }
-                Box(modifier = Modifier.background(if (alerta.senal == "LONG") colorGreen.copy(alpha = 0.15f) else colorRed.copy(alpha = 0.15f), RoundedCornerShape(6.dp)).border(1.dp, if (alerta.senal == "LONG") colorGreen else colorRed, RoundedCornerShape(6.dp)).padding(horizontal = 10.dp, vertical = 4.dp)) {
-                    Text("🎯 ${alerta.senal}", color = if (alerta.senal == "LONG") colorGreen else colorRed, fontWeight = FontWeight.Bold)
-                }
+            } catch (_: Exception) {
             }
+            return@withContext 0.0
+        }
 
-            Spacer(modifier = Modifier.height(12.dp))
+    // =========================
+    // OBTENER POSICIÓN
+    // =========================
+    suspend fun obtenerCantidadPosicion(
+        apiKey: String,
+        apiSecret: String,
+        symbol: String
+    ): Double? = withContext(Dispatchers.IO) {
 
-            // --- PRECIOS OBJETIVO ---
-            DataRow("💵 ENTRADA", String.format(Locale.US, "%.6f", alerta.precio), colorCyan)
-            DataRow("✅ TAKE PROFIT", String.format(Locale.US, "%.6f", alerta.tp), colorGreen)
-            DataRow("❌ STOP LOSS", String.format(Locale.US, "%.6f", alerta.sl), colorRed)
+        try {
+            val ts = System.currentTimeMillis()
 
-            HorizontalDivider(modifier = Modifier.padding(vertical = 12.dp), color = colorBorde)
+            val query = "symbol=$symbol&timestamp=$ts"
+            val firma = crearFirma(query, apiSecret)
 
-            // --- CONTROLES DE EJECUCIÓN ---
-            Text("⚡ EJECUTAR ORDEN RÁPIDA", color = colorCyan, fontSize = 12.sp, fontWeight = FontWeight.Bold)
-            Spacer(modifier = Modifier.height(12.dp))
+            val request = Request.Builder()
+                .url("https://fapi.binance.com/fapi/v2/positionRisk?$query&signature=$firma")
+                .addHeader("X-MBX-APIKEY", apiKey)
+                .build()
 
-            Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
-                Text("Modo de Margen:", color = Color.LightGray, fontSize = 14.sp)
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text("Aislado", color = if (!isCruzado) colorYellow else Color.Gray, fontSize = 12.sp, fontWeight = if (!isCruzado) FontWeight.Bold else FontWeight.Normal)
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Switch(checked = isCruzado, onCheckedChange = { isCruzado = it }, colors = SwitchDefaults.colors(checkedThumbColor = colorCyan, checkedTrackColor = colorCyan.copy(alpha = 0.4f), uncheckedThumbColor = colorYellow, uncheckedTrackColor = colorYellow.copy(alpha = 0.4f)))
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text("Cruzado", color = if (isCruzado) colorCyan else Color.Gray, fontSize = 12.sp, fontWeight = if (isCruzado) FontWeight.Bold else FontWeight.Normal)
-                }
-            }
+            client.newCall(request).execute().use { response ->
 
-            Text("Invertir: ${porcentajeUsado.toInt()}% de tu billetera", color = Color.White, fontSize = 14.sp)
-            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
-                // Botón -
-                IconButton(
-                    onClick = { if (porcentajeUsado > 5f) porcentajeUsado -= 1f },
-                    modifier = Modifier.size(32.dp)
-                ) {
-                    Text("-", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 24.sp)
-                }
+                val body = response.body?.string() ?: return@use
 
-                // Slider Sensible
-                Slider(
-                    value = porcentajeUsado,
-                    onValueChange = { porcentajeUsado = kotlin.math.round(it) },
-                    valueRange = 5f..100f,
-                    modifier = Modifier.weight(1f).padding(horizontal = 8.dp),
-                    colors = SliderDefaults.colors(
-                        thumbColor = if (isCruzado) colorCyan else colorYellow,
-                        activeTrackColor = if (isCruzado) colorCyan else colorYellow
-                    )
-                )
+                val arr = JsonParser.parseString(body).asJsonArray
 
-                // Botón +
-                IconButton(
-                    onClick = { if (porcentajeUsado < 100f) porcentajeUsado += 1f },
-                    modifier = Modifier.size(32.dp)
-                ) {
-                    Text("+", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 24.sp)
+                for (i in 0 until arr.size()) {
+                    val obj = arr[i].asJsonObject
+                    if (obj.get("symbol").asString == symbol) {
+                        return@withContext obj.get("positionAmt").asDouble
+                    }
                 }
             }
 
-            // --- BOTONES COMPRA/VENTA (CON INICIO DE TRAILING) ---
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                val side = if (alerta.senal == "LONG") "BUY" else "SELL"
-                val cantidadMonedas = if (alerta.precio > 0) nominalCalculado / alerta.precio else 0.0
+        } catch (_: Exception) {
+        }
 
-                Button(
-                    onClick = {
-                        if (config.apiKey.isEmpty() || config.apiSecret.isEmpty()) {
-                            Toast.makeText(context, "Faltan API Keys", Toast.LENGTH_SHORT).show()
-                            return@Button
-                        }
-                        isEjecutando = true
-                        coroutineScope.launch {
-                            // SOLUCIÓN: Usamos variable directa en lugar de destructurar para que no falle el compilador
-                            val resultado = BinanceApiManager.ejecutarOrden(config.apiKey, config.apiSecret, alerta.symbol, side, "LIMIT", cantidadMonedas, alerta.precio, tipoMargen)
-                            val exito = resultado.first
-                            val msj = resultado.second
-                            val orderId = resultado.third
+        return@withContext null
+    }
 
-                            Toast.makeText(context, msj, Toast.LENGTH_LONG).show()
+    // =========================
+    // LIMPIAR ÓRDENES
+    // =========================
+    suspend fun limpiarOrdenesEstrictamente(
+        apiKey: String,
+        apiSecret: String,
+        symbol: String
+    ): Boolean = withContext(Dispatchers.IO) {
 
-                            if (exito && orderId > 0) {
-                                PositionManager.iniciarMonitoreo(context, config, alerta.symbol, alerta.senal, alerta.precio, alerta.tp, alerta.sl, config.apalancamiento, orderId, cantidadMonedas)
-                                // onDismiss() // COMENTADO: Para que la Card no se borre del dashboard al ejecutar la orden
-                            }
-                            isEjecutando = false
-                        }
-                    },
-                    modifier = Modifier.weight(1f), enabled = !isEjecutando,
-                    colors = ButtonDefaults.buttonColors(containerColor = colorCyan)
-                ) {
-                    Text(if (isEjecutando) "..." else "📝 LIMIT", color = colorFondo, fontWeight = FontWeight.Bold, fontSize = 12.sp)
-                }
+        try {
+            val ts = System.currentTimeMillis()
 
-                Button(
-                    onClick = {
-                        if (config.apiKey.isEmpty() || config.apiSecret.isEmpty()) {
-                            Toast.makeText(context, "Faltan API Keys", Toast.LENGTH_SHORT).show()
-                            return@Button
-                        }
-                        isEjecutando = true
-                        coroutineScope.launch {
-                            // SOLUCIÓN: Usamos variable directa en lugar de destructurar para que no falle el compilador
-                            val resultado = BinanceApiManager.ejecutarOrden(config.apiKey, config.apiSecret, alerta.symbol, side, "MARKET", cantidadMonedas, alerta.precio, tipoMargen)
-                            val exito = resultado.first
-                            val msj = resultado.second
-                            val orderId = resultado.third
+            val query = "symbol=$symbol&timestamp=$ts"
+            val firma = crearFirma(query, apiSecret)
 
-                            Toast.makeText(context, msj, Toast.LENGTH_LONG).show()
+            val request = Request.Builder()
+                .url("https://fapi.binance.com/fapi/v1/allOpenOrders?$query&signature=$firma")
+                .delete()
+                .addHeader("X-MBX-APIKEY", apiKey)
+                .build()
 
-                            if (exito && orderId > 0) {
-                                PositionManager.iniciarMonitoreo(context, config, alerta.symbol, alerta.senal, alerta.precio, alerta.tp, alerta.sl, config.apalancamiento, orderId, cantidadMonedas)
-                                // onDismiss() // COMENTADO: Para que la Card no se borre del dashboard al ejecutar la orden
-                            }
-                            isEjecutando = false
-                        }
-                    },
-                    modifier = Modifier.weight(1f), enabled = !isEjecutando,
-                    colors = ButtonDefaults.buttonColors(containerColor = colorGreen)
-                ) {
-                    Text(if (isEjecutando) "..." else "🚀 MARKET", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 12.sp)
-                }
-            }
+            client.newCall(request).execute().close()
 
-            Button(
-                onClick = onDismiss, modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
-                colors = ButtonDefaults.buttonColors(containerColor = Color.Transparent), border = androidx.compose.foundation.BorderStroke(1.dp, colorBorde)
-            ) {
-                Text("❌ DESCARTAR SEÑAL", color = Color.LightGray)
-            }
+            return@withContext true
 
-            HorizontalDivider(modifier = Modifier.padding(vertical = 12.dp), color = colorBorde)
-
-// --- RESULTADOS ESTIMADOS ---
-            Text("🏦 RESULTADOS ESTIMADOS", color = colorYellow, fontSize = 12.sp, fontWeight = FontWeight.Bold)
-            if (isRiesgoAlto) {
-                Text("⚠️ RIESGO > 4%: Posición achicada automáticamente para blindar capital.", color = colorRed, fontSize = 11.sp, fontWeight = FontWeight.Bold)
-            }
-            DataRow("Margen a Usar ($tipoMargen)", String.format(Locale.US, "$%.2f USDT", margenRealUsar), if (isRiesgoAlto) colorRed else Color.White)
-            DataRow("Tamaño de Posición (Apalancado)", String.format(Locale.US, "$%.2f USDT", nominalCalculado), Color.LightGray)
-
-            HorizontalDivider(modifier = Modifier.padding(vertical = 6.dp), color = colorBorde.copy(alpha = 0.5f))
-
-// Detalle de comisiones
-            Text("💸 Gastos de Operación (Fees Binance)", color = Color.Gray, fontSize = 11.sp, fontWeight = FontWeight.Bold)
-            DataRow("Fee Apertura Est. (0.05%)", String.format(Locale.US, "-$%.4f USDT", feeAperturaEst), colorRed.copy(alpha = 0.8f))
-            DataRow("Fee Cierre Est. (0.05%)", String.format(Locale.US, "-$%.4f USDT", feeCierreEst), colorRed.copy(alpha = 0.8f))
-
-            HorizontalDivider(modifier = Modifier.padding(vertical = 6.dp), color = colorBorde.copy(alpha = 0.5f))
-
-            // PNL Bruto y Neto
-            Row(modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp), horizontalArrangement = Arrangement.SpaceBetween) {
-                Text("PNL Bruto Est. (Al tocar TP)", color = Color.Gray, fontSize = 13.sp)
-                Text(
-                    text = String.format(Locale.US, "$%.2f USDT (+%.2f%%)", pnlBrutoCalculado, roeCalculado),
-                    color = Color.LightGray, fontWeight = FontWeight.Normal, fontSize = 13.sp
-                )
-            }
-            Row(modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp), horizontalArrangement = Arrangement.SpaceBetween) {
-                Text("PNL NETO (Ganancia Limpia)", color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Bold)
-                Text(
-                    text = String.format(Locale.US, "$%.2f USDT", pnlNetoCalculado),
-                    color = if (pnlNetoCalculado > 0) colorGreen else colorRed, fontWeight = FontWeight.ExtraBold, fontSize = 15.sp
-                )
-            }
+        } catch (_: Exception) {
+            return@withContext false
         }
     }
-}
 
-@Composable
-fun DataRow(label: String, value: String, valueColor: Color) {
-    Row(modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp), horizontalArrangement = Arrangement.SpaceBetween) {
-        Text(label, color = Color.Gray, fontSize = 14.sp)
-        Text(value, color = valueColor, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+    // =========================
+    // CIERRE MARKET
+    // =========================
+    suspend fun ejecutarCierreGarantizado(
+        apiKey: String,
+        apiSecret: String,
+        symbol: String,
+        side: String,
+        quantity: Double,
+        marginType: String
+    ): Boolean = withContext(Dispatchers.IO) {
+
+        try {
+            val ts = System.currentTimeMillis()
+
+            val qtyStr = quantity.toString()
+
+            val query = "symbol=$symbol&side=$side&type=MARKET&quantity=$qtyStr&timestamp=$ts"
+
+            val form = FormBody.Builder()
+                .add("symbol", symbol)
+                .add("side", side)
+                .add("type", "MARKET")
+                .add("quantity", qtyStr)
+                .add("timestamp", ts.toString())
+                .add("signature", crearFirma(query, apiSecret))
+                .build()
+
+            val request = Request.Builder()
+                .url("https://fapi.binance.com/fapi/v1/order")
+                .post(form)
+                .addHeader("X-MBX-APIKEY", apiKey)
+                .build()
+
+            client.newCall(request).execute().use { response ->
+                return@withContext response.isSuccessful
+            }
+
+        } catch (_: Exception) {
+            return@withContext false
+        }
     }
 }
