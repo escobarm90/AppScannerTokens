@@ -168,7 +168,7 @@ fun AlertCard(
                             Toast.makeText(context, msj, Toast.LENGTH_LONG).show()
 
                             if (exito && orderId > 0) {
-                                PositionManager.iniciarMonitoreo(context, config, alerta.symbol, alerta.senal, alerta.precio, alerta.tp, alerta.sl, config.apalancamiento, orderId)
+                                PositionManager.iniciarMonitoreo(context, config, alerta.symbol, alerta.senal, alerta.precio, alerta.tp, alerta.sl, config.apalancamiento, orderId, cantidadMonedas)
                                 // onDismiss() // COMENTADO: Para que la Card no se borre del dashboard al ejecutar la orden
                             }
                             isEjecutando = false
@@ -197,7 +197,7 @@ fun AlertCard(
                             Toast.makeText(context, msj, Toast.LENGTH_LONG).show()
 
                             if (exito && orderId > 0) {
-                                PositionManager.iniciarMonitoreo(context, config, alerta.symbol, alerta.senal, alerta.precio, alerta.tp, alerta.sl, config.apalancamiento, orderId)
+                                PositionManager.iniciarMonitoreo(context, config, alerta.symbol, alerta.senal, alerta.precio, alerta.tp, alerta.sl, config.apalancamiento, orderId, cantidadMonedas)
                                 // onDismiss() // COMENTADO: Para que la Card no se borre del dashboard al ejecutar la orden
                             }
                             isEjecutando = false

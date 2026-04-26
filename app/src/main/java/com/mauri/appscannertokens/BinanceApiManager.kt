@@ -1,6 +1,5 @@
 package com.mauri.appscannertokens
 
-import android.util.Log
 import com.google.gson.JsonParser
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -82,12 +81,9 @@ object BinanceApiManager {
                         precisionCache[sym] = Pair(qtyPrec, pricePrec)
                     }
                     return@use precisionCache[symbol] ?: Pair(3, 4)
-                } else {
-                    // ¡AQUÍ ESTÁ EL ELSE QUE FALTA PARA QUE KOTLIN NO FALLE!
-                    return@use Pair(3, 4)
                 }
             }
-        } catch (e: Exception) {
+        } catch (_: Exception) {
         }
         return@withContext Pair(3, 4)
     }
@@ -319,9 +315,9 @@ object BinanceApiManager {
     ): Boolean = withContext(Dispatchers.IO) {
         try {
             cancelarOrdenes(apiKey, apiSecret, symbol)
-        } catch (e: Exception) {
+        } catch (_: Exception) {
         }
-        for (i in 1..10) {
+        repeat(10) {
             try {
                 val ts = System.currentTimeMillis()
                 val q = "symbol=$symbol&recvWindow=60000&timestamp=$ts"
@@ -356,7 +352,7 @@ object BinanceApiManager {
                                             ).build()
                                         ).addHeader("X-MBX-APIKEY", apiKey).build()
                                 client.newCall(delReq).execute().close()
-                            } catch (e: Exception) {
+                            } catch (_: Exception) {
                             }
                         }
                         false
@@ -365,7 +361,7 @@ object BinanceApiManager {
                     }
                 }
                 if (result) return@withContext true
-            } catch (e: Exception) {
+            } catch (_: Exception) {
             }
             kotlinx.coroutines.delay(200)
         }
@@ -379,7 +375,7 @@ object BinanceApiManager {
         side: String,
         type: String,
         stopPrice: Double
-    ): Boolean = withContext(Dispatchers.IO) {
+    ): Pair<Boolean, String> = withContext(Dispatchers.IO) {
         try {
             val ts = System.currentTimeMillis()
             val (_, pricePrec) = obtenerPrecisiones(symbol)
@@ -400,15 +396,66 @@ object BinanceApiManager {
             val result = client.newCall(req).execute().use { res ->
                 val body = res.body?.string() ?: ""
                 if (!res.isSuccessful) {
-                    // ESTO IMPRIMIRÁ EL MOTIVO EXACTO DEL RECHAZO EN TU CONSOLA NEGRA
                     val errorMsg = JSONObject(body).optString("msg", "Error Desconocido")
-                    AlertManager.agregarLog("❌ RECHAZO BINANCE ($type): $errorMsg")
+                    val errorCode = JSONObject(body).optInt("code", 0)
+                    AlertManager.agregarLog("❌ RECHAZO BINANCE ($type): $errorMsg (Cod: $errorCode)")
+                    Pair(false, body)
+                } else {
+                    Pair(true, body)
                 }
-                res.isSuccessful
             }
             return@withContext result
         } catch (e: Exception) {
-            return@withContext false
+            return@withContext Pair(false, "Error de red: ${e.message}")
         }
+    }
+
+    suspend fun crearEscudoGarantizado(
+        apiKey: String,
+        apiSecret: String,
+        symbol: String,
+        side: String,
+        type: String,
+        stopPrice: Double,
+        quantity: Double,
+        marginType: String
+    ): Boolean {
+        for (i in 1..3) {
+            val (exito, response) = crearOrdenStop(apiKey, apiSecret, symbol, side, type, stopPrice)
+            if (exito) return true
+
+            try {
+                val json = JSONObject(response)
+                val code = json.optInt("code", 0)
+
+                if (code == -2021) {
+                    AlertManager.agregarLog("⚠️ [CRÍTICO] $type para $symbol se dispararía de inmediato. Ejecutando CIERRE MARKET de emergencia...")
+                    val (mktExito, mktMsj, _) = ejecutarOrden(apiKey, apiSecret, symbol, side, "MARKET", quantity, 0.0, marginType)
+                    if (mktExito) return true
+                    AlertManager.agregarLog("❌ Falló cierre market de emergencia: $mktMsj")
+                }
+            } catch (e: Exception) {}
+
+            AlertManager.agregarLog("🔄 Reintentando colocar escudo $type para $symbol (Intento $i/3)...")
+            kotlinx.coroutines.delay(1000)
+        }
+        return false
+    }
+
+    suspend fun ejecutarCierreGarantizado(
+        apiKey: String,
+        apiSecret: String,
+        symbol: String,
+        side: String,
+        quantity: Double,
+        marginType: String
+    ): Boolean {
+        for (i in 1..3) {
+            val (exito, msj, _) = ejecutarOrden(apiKey, apiSecret, symbol, side, "MARKET", quantity, 0.0, marginType)
+            if (exito) return true
+            AlertManager.agregarLog("⚠️ Reintentando cierre MARKET $symbol (Intento $i/3): $msj")
+            kotlinx.coroutines.delay(1500)
+        }
+        return false
     }
 }

@@ -140,24 +140,48 @@ fun MonitorScreen(onOpenConfig: () -> Unit) {
     Column(modifier = Modifier.fillMaxSize().background(colorFondo).padding(top = 16.dp)) {
 
         // --- HEADER FIJO ---
+        // --- HEADER FIJO ---
         Row(
             modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text("📡 Dashboard", color = colorPrimary, fontSize = 24.sp, fontWeight = FontWeight.Bold)
-            Button(
-                onClick = onOpenConfig,
-                colors = ButtonDefaults.buttonColors(containerColor = colorCard),
-                shape = RoundedCornerShape(8.dp),
-                border = androidx.compose.foundation.BorderStroke(1.dp, colorBorde),
-                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp)
-            ) {
-                Text("⚙️ Parámetros", color = Color.White, fontWeight = FontWeight.SemiBold)
+
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                // --- BOTÓN DE APAGADO TOTAL (KILL SWITCH) ---
+                Button(
+                    onClick = {
+                        // 1. Detenemos el motor en segundo plano
+                        isMotorRunning = false
+                        TradingScannerService.isRunning = false
+                        val intent = Intent(context, TradingScannerService::class.java)
+                        context.stopService(intent)
+
+                        // 2. Cerramos la actividad y matamos el proceso
+                        val activity = context as? android.app.Activity
+                        activity?.finishAffinity()
+                        kotlin.system.exitProcess(0)
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFda3633)),
+                    shape = RoundedCornerShape(8.dp),
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp)
+                ) {
+                    Text("🛑 Salir", color = Color.White, fontWeight = FontWeight.Bold)
+                }
+
+                // --- BOTÓN DE PARÁMETROS ORIGINAL ---
+                Button(
+                    onClick = onOpenConfig,
+                    colors = ButtonDefaults.buttonColors(containerColor = colorCard),
+                    shape = RoundedCornerShape(8.dp),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, colorBorde),
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp)
+                ) {
+                    Text("⚙️ Parámetros", color = Color.White, fontWeight = FontWeight.SemiBold)
+                }
             }
         }
-
-        Spacer(modifier = Modifier.height(16.dp))
 
 // --- MENÚ DE NAVEGACIÓN (TABS) ---
         SecondaryTabRow(
@@ -319,6 +343,20 @@ fun MonitorScreen(onOpenConfig: () -> Unit) {
                                                     modifier = Modifier.fillMaxWidth().height(6.dp),
                                                     color = colorEstado, trackColor = colorBorde
                                                 )
+
+                                                Spacer(modifier = Modifier.height(12.dp))
+
+                                                // --- NUEVO BOTÓN: CIERRE MANUAL 100% ---
+                                                Button(
+                                                    onClick = {
+                                                        PositionManager.cerrarPosicionManual(context, config, pos.symbol)
+                                                    },
+                                                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFda3633)), // Rojo alerta
+                                                    modifier = Modifier.fillMaxWidth(),
+                                                    shape = RoundedCornerShape(6.dp)
+                                                ) {
+                                                    Text("CERRAR POSICIÓN AL MARKET", color = Color.White, fontWeight = FontWeight.Bold)
+                                                }
                                             }
                                         }
                                     }

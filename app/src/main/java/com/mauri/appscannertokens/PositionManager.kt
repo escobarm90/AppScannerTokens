@@ -8,7 +8,6 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
-import kotlin.math.abs
 
 data class ActivePosition(
     val symbol: String,
@@ -17,13 +16,14 @@ data class ActivePosition(
     var currentPrice: Double,
     var initialTp: Double,
     var dynamicTp: Double,
-    var currentSl: Double, // Guardamos el SL dinámico
+    var currentSl: Double,
     var trailingLevel: Int = 0,
     var pnlNeto: Double = 0.0,
     var roePct: Double = 0.0,
     var isClosed: Boolean = false,
     val apalancamiento: Int,
-    val orderId: Long
+    val orderId: Long,
+    val quantity: Double = 0.0
 )
 
 object PositionManager {
@@ -35,9 +35,6 @@ object PositionManager {
     private const val PREFS_NAME = "PositionsPrefs"
     private const val KEY_POSITIONS = "active_positions"
 
-    // ==========================================
-    // MEMORIA PERSISTENTE (PUNTO 1)
-    // ==========================================
     fun inicializar(context: Context) {
         val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
         val json = prefs.getString(KEY_POSITIONS, null)
@@ -57,15 +54,29 @@ object PositionManager {
                         val orderEstado = BinanceApiManager.obtenerEstadoOrden(config.apiKey, config.apiSecret, pos.symbol, pos.orderId)
                         val posAmt = BinanceApiManager.obtenerCantidadPosicion(config.apiKey, config.apiSecret, pos.symbol) ?: 0.0
 
-                        if (orderEstado in listOf("CANCELED", "REJECTED", "EXPIRED") && posAmt == 0.0) {
-                            AlertManager.agregarLog("🗑️ Limpiando ${pos.symbol}: Cancelada y sin posición.")
-                            removerPosicion(context, pos.symbol)
-                        } else if (orderEstado == "FILLED" && posAmt == 0.0) {
-                            AlertManager.agregarLog("🗑️ Limpiando ${pos.symbol}: Posición ya cerrada en Binance.")
-                            removerPosicion(context, pos.symbol)
-                        } else {
-                            AlertManager.agregarLog("✅ Reanudando vigilancia activa para ${pos.symbol}...")
-                            vigilarOrden(context, config, pos, true)
+                        when (orderEstado) {
+                            in listOf("CANCELED", "REJECTED", "EXPIRED") -> {
+                                if (posAmt == 0.0) {
+                                    AlertManager.agregarLog("🗑️ Limpiando ${pos.symbol}: Cancelada y sin posición.")
+                                    removerPosicion(context, pos.symbol)
+                                } else {
+                                    AlertManager.agregarLog("✅ Reanudando vigilancia activa para ${pos.symbol}...")
+                                    vigilarOrden(context, config, pos, esReanudacion = true)
+                                }
+                            }
+                            "FILLED" -> {
+                                if (posAmt == 0.0) {
+                                    AlertManager.agregarLog("🗑️ Limpiando ${pos.symbol}: Posición ya cerrada en Binance.")
+                                    removerPosicion(context, pos.symbol)
+                                } else {
+                                    AlertManager.agregarLog("✅ Reanudando vigilancia activa para ${pos.symbol}...")
+                                    vigilarOrden(context, config, pos, esReanudacion = true)
+                                }
+                            }
+                            else -> {
+                                AlertManager.agregarLog("✅ Reanudando vigilancia activa para ${pos.symbol}...")
+                                vigilarOrden(context, config, pos, esReanudacion = true)
+                            }
                         }
                     }
                 }
@@ -73,27 +84,37 @@ object PositionManager {
         }
     }
 
-    private fun guardarEstado(context: Context) {
-        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        prefs.edit().putString(KEY_POSITIONS, gson.toJson(_positions.value)).apply()
+    private fun cargarConfiguracion(context: Context): UserConfig {
+        val prefs = context.getSharedPreferences("AppScannerConfig", Context.MODE_PRIVATE)
+        val jsonGuardado = prefs.getString("config_data", null)
+        return if (jsonGuardado != null) gson.fromJson(jsonGuardado, UserConfig::class.java) else UserConfig()
     }
 
-    fun iniciarMonitoreo(context: Context, config: UserConfig, symbol: String, senal: String, entryPrice: Double, tpAbsoluto: Double, slAbsoluto: Double, apalancamiento: Int, orderId: Long) {
+    private fun guardarEstado(context: Context) {
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val json = gson.toJson(_positions.value)
+        prefs.edit().putString(KEY_POSITIONS, json).apply()
+    }
+
+    fun iniciarMonitoreo(context: Context, config: UserConfig, symbol: String, senal: String, entryPrice: Double, tpAbsoluto: Double, slAbsoluto: Double, apalancamiento: Int, orderId: Long, quantity: Double) {
         if (_positions.value.any { it.symbol == symbol && !it.isClosed }) return
 
-        val nuevaPosicion = ActivePosition(symbol, senal, entryPrice, entryPrice, tpAbsoluto, tpAbsoluto, slAbsoluto, 0, 0.0, 0.0, false, apalancamiento, orderId)
+        val nuevaPosicion = ActivePosition(symbol, senal, entryPrice, entryPrice, tpAbsoluto, tpAbsoluto, slAbsoluto, 0, 0.0, 0.0, false, apalancamiento, orderId, quantity)
         _positions.update { it + nuevaPosicion }
-        guardarEstado(context) // Blindamos en disco de inmediato
+        guardarEstado(context)
+        AlertManager.agregarLog("📡 [VIGILANCIA] Posición añadida al monitor: ${nuevaPosicion.symbol}")
 
         scope.launch { vigilarOrden(context, config, nuevaPosicion, false) }
     }
 
     private suspend fun vigilarOrden(context: Context, config: UserConfig, posInicial: ActivePosition, esReanudacion: Boolean) {
         val symbol = posInicial.symbol
-        val senal = posInicial.side
+        val senal = posInicial.side.uppercase()
         val apalancamiento = posInicial.apalancamiento
         val orderId = posInicial.orderId
-        val ladoSalida = if (senal == "LONG") "SELL" else "BUY"
+
+        val isLong = senal == "LONG" || senal == "BUY"
+        val ladoSalida = if (isLong) "SELL" else "BUY"
 
         var tpDinamico = posInicial.dynamicTp
         var slDinamico = posInicial.currentSl
@@ -101,16 +122,58 @@ object PositionManager {
         val entryPrice = posInicial.entryPrice
 
         if (!esReanudacion) {
-            AlertManager.agregarLog("👀 Vigilando orden $symbol en el Order Book...")
+            AlertManager.agregarLog("🛡️ Iniciando protección inmediata para $symbol...")
+
+            // Limpiamos órdenes previas ANTES de colocar los nuevos escudos
+            BinanceApiManager.limpiarOrdenesEstrictamente(config.apiKey, config.apiSecret, symbol)
+
+            var slFinal = posInicial.currentSl
+            var tpFinal = posInicial.dynamicTp
+
+            // REGLA DE SUPERVIVENCIA ESTRICTA (Calculada sobre el precio de entrada deseado)
+            val distMinimaVital = entryPrice * 0.004
+            if (isLong) {
+                if (slFinal > entryPrice - distMinimaVital) slFinal = entryPrice - distMinimaVital
+                if (tpFinal < entryPrice + distMinimaVital) tpFinal = entryPrice + distMinimaVital
+            } else {
+                if (slFinal < entryPrice + distMinimaVital) slFinal = entryPrice + distMinimaVital
+                if (tpFinal > entryPrice - distMinimaVital) tpFinal = entryPrice - distMinimaVital
+            }
+
+            AlertManager.agregarLog(
+                "🛡️ COLOCANDO ESCUDOS (PREVENTIVOS):\n" +
+                        "Símbolo: $symbol | Lado: $ladoSalida\n" +
+                        "SL: $slFinal | TP: $tpFinal"
+            )
+
+            // Colocamos las órdenes de TP y SL inmediatamente, incluso antes de que la orden principal se llene.
+            // Binance permite órdenes Close-Position (Reduce Only) preventivas.
+            val tpOk = BinanceApiManager.crearEscudoGarantizado(config.apiKey, config.apiSecret, symbol, ladoSalida, "TAKE_PROFIT_MARKET", tpFinal, posInicial.quantity, config.tipoMargen)
+            val slOk = BinanceApiManager.crearEscudoGarantizado(config.apiKey, config.apiSecret, symbol, ladoSalida, "STOP_MARKET", slFinal, posInicial.quantity, config.tipoMargen)
+
+            if (!tpOk || !slOk) {
+                AlertManager.agregarLog("⚠️ Algunos escudos físicos fallaron tras reintentos. El Escudo VIRTUAL en RAM los respaldará.")
+            } else {
+                AlertManager.agregarLog("✅ Escudos físicos asegurados en Binance.")
+            }
+
+            // Actualizamos el estado con los valores finales ajustados por la regla vital
+            tpDinamico = tpFinal
+            slDinamico = slFinal
+            _positions.update { l -> l.map { if (it.symbol == symbol) it.copy(dynamicTp = tpFinal, currentSl = slFinal) else it } }
+            guardarEstado(context)
+
+            AlertManager.agregarLog("👀 Esperando ejecución de $symbol en el Order Book...")
 
             var isFilled = false
-            for (i in 1..9000) {
+            repeat(9000) {
                 val estado = BinanceApiManager.obtenerEstadoOrden(config.apiKey, config.apiSecret, symbol, orderId)
                 if (estado == "FILLED") {
                     isFilled = true
-                    break
+                    return@repeat
                 } else if (estado in listOf("CANCELED", "REJECTED", "EXPIRED")) {
-                    AlertManager.agregarLog("❌ [AVISO] Orden $symbol cancelada.")
+                    AlertManager.agregarLog("❌ [AVISO] Orden $symbol cancelada o expirada.")
+                    BinanceApiManager.limpiarOrdenesEstrictamente(config.apiKey, config.apiSecret, symbol)
                     removerPosicion(context, symbol)
                     return
                 }
@@ -118,58 +181,7 @@ object PositionManager {
             }
 
             if (!isFilled) return
-            AlertManager.agregarLog("✅ ¡Orden $symbol EJECUTADA! Colocando escudos físicos...")
-
-            BinanceApiManager.limpiarOrdenesEstrictamente(config.apiKey, config.apiSecret, symbol)
-
-            val precioActualSeguro = BinanceApiManager.obtenerPrecioActual(symbol)
-
-            // 1. RESCATAMOS LAS DISTANCIAS MATEMÁTICAS PURAS
-            val distSlOriginal = kotlin.math.abs(posInicial.entryPrice - posInicial.currentSl)
-            val distTpOriginal = kotlin.math.abs(posInicial.dynamicTp - posInicial.entryPrice)
-
-            // 2. RECALCULAMOS DESDE EL PRECIO DE ENTRADA REAL EN BINANCE
-            var slFinal = if (senal == "LONG") precioActualSeguro - distSlOriginal else precioActualSeguro + distSlOriginal
-            var tpFinal = if (senal == "LONG") precioActualSeguro + distTpOriginal else precioActualSeguro - distTpOriginal
-
-            // 3. REGLA DE SUPERVIVENCIA: BINANCE EXIGE MÍNIMO 0.4% DE DISTANCIA
-            val distMinimaVital = precioActualSeguro * 0.004
-            if (kotlin.math.abs(precioActualSeguro - slFinal) < distMinimaVital) {
-                slFinal = if (senal == "LONG") precioActualSeguro - distMinimaVital else precioActualSeguro + distMinimaVital
-            }
-            if (kotlin.math.abs(tpFinal - precioActualSeguro) < distMinimaVital) {
-                tpFinal = if (senal == "LONG") precioActualSeguro + distMinimaVital else precioActualSeguro - distMinimaVital
-            }
-
-            // LISTADO DE CONSOLA VERTICAL
-            AlertManager.agregarLog(
-                "🛡️ INTENTO DE COLOCAR ESCUDOS FÍSICOS:\n" +
-                        "Símbolo: $symbol\n" +
-                        "Lado Salida: $ladoSalida\n" +
-                        "Precio Actual (Base): $precioActualSeguro\n" +
-                        "SL Calculado: $slFinal\n" +
-                        "TP Calculado: $tpFinal"
-            )
-
-            val tpOk = BinanceApiManager.crearOrdenStop(config.apiKey, config.apiSecret, symbol, ladoSalida, "TAKE_PROFIT_MARKET", tpFinal)
-            val slOk = BinanceApiManager.crearOrdenStop(config.apiKey, config.apiSecret, symbol, ladoSalida, "STOP_MARKET", slFinal)
-
-            // ✅ SOLUCIÓN DEFINITIVA: KILL SWITCH APAGADO + ESCUDO VIRTUAL
-            if (!tpOk || !slOk) {
-                AlertManager.agregarLog(
-                    "⚠️ RECHAZO DE BINANCE DETECTADO:\n" +
-                            "Motivo: Slippage extremo invalidó la orden física.\n" +
-                            "Acción: Posición MANTENIDA ABIERTA.\n" +
-                            "Protección: Activando Escudo VIRTUAL en RAM."
-                )
-            } else {
-                AlertManager.agregarLog("✅ Escudos físicos aceptados en Binance.")
-            }
-
-            tpDinamico = tpFinal
-            slDinamico = slFinal
-            _positions.update { l -> l.map { if (it.symbol == symbol) it.copy(dynamicTp = tpFinal, currentSl = slFinal) else it } }
-            guardarEstado(context)
+            AlertManager.agregarLog("✅ ¡Orden $symbol EJECUTADA! Vigilancia activa iniciada.")
         }
 
         AlertManager.agregarLog("⏱️ Iniciando Trailing 0.3s (RAM WS) para $symbol...")
@@ -192,35 +204,36 @@ object PositionManager {
                     }
                 }
 
-                val precioActual = BinanceApiManager.preciosWs[symbol]
-                if (precioActual == null) continue
+                val precioActual = BinanceApiManager.preciosWs[symbol] ?: continue
 
                 _positions.update { lista ->
                     lista.map { pos ->
                         if (pos.symbol == symbol) {
-                            val dist = if (senal == "LONG") precioActual - pos.entryPrice else pos.entryPrice - precioActual
+                            // --- CÁLCULO PNL CORREGIDO ---
+                            val dist = if (isLong) precioActual - pos.entryPrice else pos.entryPrice - precioActual
                             val margenEstimado = (pos.entryPrice * kotlin.math.abs(ultimoMontoPosicion)) / apalancamiento
                             val pnl = dist * kotlin.math.abs(ultimoMontoPosicion)
                             val roe = if (margenEstimado > 0) (pnl / margenEstimado) * 100 else 0.0
+                            
+                            // IMPORTANTE: NO usamos copy() aquí porque copy() crea un objeto nuevo que el StateFlow detecta bien.
                             pos.copy(currentPrice = precioActual, pnlNeto = pnl, roePct = roe)
                         } else pos
                     }
                 }
 
-                // ✅ ESCUDO VIRTUAL EN RAM (CIERRA DESDE EL TELÉFONO SI BINANCE FALLA)
-                if (ultimoMontoPosicion > 0.0) {
-                    val tocoSlVirtual = if (senal == "LONG") precioActual <= slDinamico else precioActual >= slDinamico
-                    val tocoTpVirtual = if (senal == "LONG") precioActual >= tpDinamico else precioActual <= tpDinamico
+                if (ultimoMontoPosicion != 0.0) {
+                    val tocoSlVirtual = if (isLong) precioActual <= slDinamico else precioActual >= slDinamico
+                    val tocoTpVirtual = if (isLong) precioActual >= tpDinamico else precioActual <= tpDinamico
 
                     if (tocoSlVirtual || tocoTpVirtual) {
                         AlertManager.agregarLog(
                             "⚡ EJECUCIÓN VIRTUAL EN RAM:\n" +
                                     "Símbolo: $symbol\n" +
                                     "Motivo: Precio cruzó SL/TP Dinámico.\n" +
-                                    "Acción: Ejecutando cierre a MARKET de emergencia."
+                                    "Acción: Ejecutando cierre a MARKET de emergencia (Garantizado)."
                         )
                         BinanceApiManager.limpiarOrdenesEstrictamente(config.apiKey, config.apiSecret, symbol)
-                        BinanceApiManager.ejecutarOrden(config.apiKey, config.apiSecret, symbol, ladoSalida, "MARKET", kotlin.math.abs(ultimoMontoPosicion), 0.0, config.tipoMargen)
+                        BinanceApiManager.ejecutarCierreGarantizado(config.apiKey, config.apiSecret, symbol, ladoSalida, kotlin.math.abs(ultimoMontoPosicion), config.tipoMargen)
                         marcarComoCerrada(context, symbol)
                         break
                     }
@@ -228,7 +241,7 @@ object PositionManager {
 
                 val distanciaTotal = kotlin.math.abs(tpDinamico - entryPrice)
                 if (distanciaTotal > 0) {
-                    val progreso = if (senal == "LONG") (precioActual - entryPrice) / distanciaTotal else (entryPrice - precioActual) / distanciaTotal
+                    val progreso = if (isLong) (precioActual - entryPrice) / distanciaTotal else (entryPrice - precioActual) / distanciaTotal
 
                     if (progreso >= 0.70) {
                         AlertManager.agregarLog("🔥 [TRAILING] $symbol cruzó el 70%. Modificando escudos...")
@@ -243,29 +256,29 @@ object PositionManager {
                             break
                         }
 
-                        val distSl = distanciaTotal * 0.60
+                        val distSl = distanciaTotal * 0.50
                         val aumentoTp = distanciaTotal * 0.30
 
-                        val nuevoSl = if (senal == "LONG") entryPrice + distSl else entryPrice - distSl
-                        val nuevoTp = if (senal == "LONG") tpDinamico + aumentoTp else tpDinamico - aumentoTp
+                        val nuevoSl = if (isLong) entryPrice + distSl else entryPrice - distSl
+                        val nuevoTp = if (isLong) tpDinamico + aumentoTp else tpDinamico - aumentoTp
 
                         val precioSeguro = BinanceApiManager.preciosWs[symbol] ?: BinanceApiManager.obtenerPrecioActual(symbol)
                         var mercadoCruzado = false
-                        if (senal == "LONG" && (precioSeguro <= nuevoSl || precioSeguro >= nuevoTp)) mercadoCruzado = true
-                        if (senal == "SHORT" && (precioSeguro >= nuevoSl || precioSeguro <= nuevoTp)) mercadoCruzado = true
+                        if (isLong && (precioSeguro <= nuevoSl || precioSeguro >= nuevoTp)) mercadoCruzado = true
+                        if (!isLong && (precioSeguro >= nuevoSl || precioSeguro <= nuevoTp)) mercadoCruzado = true
 
                         if (mercadoCruzado) {
-                            AlertManager.agregarLog("⚡ Volatilidad extrema. Cerrando a MARKET.")
-                            BinanceApiManager.ejecutarOrden(config.apiKey, config.apiSecret, symbol, ladoSalida, "MARKET", kotlin.math.abs(checkPos), 0.0, config.tipoMargen)
+                            AlertManager.agregarLog("⚡ Volatilidad extrema. Cerrando a MARKET (Garantizado).")
+                            BinanceApiManager.ejecutarCierreGarantizado(config.apiKey, config.apiSecret, symbol, ladoSalida, kotlin.math.abs(checkPos), config.tipoMargen)
                             marcarComoCerrada(context, symbol)
                             break
                         }
 
-                        val tpOk2 = BinanceApiManager.crearOrdenStop(config.apiKey, config.apiSecret, symbol, ladoSalida, "TAKE_PROFIT_MARKET", nuevoTp)
-                        val slOk2 = BinanceApiManager.crearOrdenStop(config.apiKey, config.apiSecret, symbol, ladoSalida, "STOP_MARKET", nuevoSl)
+                        val tpOk2 = BinanceApiManager.crearEscudoGarantizado(config.apiKey, config.apiSecret, symbol, ladoSalida, "TAKE_PROFIT_MARKET", nuevoTp, kotlin.math.abs(checkPos), config.tipoMargen)
+                        val slOk2 = BinanceApiManager.crearEscudoGarantizado(config.apiKey, config.apiSecret, symbol, ladoSalida, "STOP_MARKET", nuevoSl, kotlin.math.abs(checkPos), config.tipoMargen)
 
                         if (!tpOk2 || !slOk2) {
-                            AlertManager.agregarLog("🚨 Binance rechazó expansivos. La protección Virtual en RAM sigue activa en los nuevos valores.")
+                            AlertManager.agregarLog("🚨 Binance rechazó expansivos tras reintentos. La protección Virtual en RAM sigue activa.")
                         }
 
                         tpDinamico = nuevoTp
@@ -279,7 +292,7 @@ object PositionManager {
                             }
                         }
                         guardarEstado(context)
-                        AlertManager.agregarLog("🛡️ [ÉXITO NIVEL $nivelTrailing] SL subido | TP extendido.")
+                        AlertManager.agregarLog("🛡️ [ÉXITO NIVEL $nivelTrailing] SL asegurado al 50% | TP extendido 30%.")
                     }
                 }
             } catch (e: Exception) {
@@ -289,6 +302,36 @@ object PositionManager {
                     marcarComoCerrada(context, symbol)
                     break
                 }
+            }
+        }
+    }
+
+    fun cerrarPosicionManual(context: Context, config: UserConfig, symbol: String) {
+        scope.launch {
+            try {
+                AlertManager.agregarLog("⚠️ CIERRE MANUAL INICIADO PARA $symbol")
+                BinanceApiManager.limpiarOrdenesEstrictamente(config.apiKey, config.apiSecret, symbol)
+
+                val posAmt = BinanceApiManager.obtenerCantidadPosicion(config.apiKey, config.apiSecret, symbol) ?: 0.0
+                if (posAmt != 0.0) {
+                    val ladoReal = if (posAmt > 0) "SELL" else "BUY"
+                    val qtyStr = kotlin.math.abs(posAmt)
+
+                    BinanceApiManager.ejecutarCierreGarantizado(
+                        apiKey = config.apiKey,
+                        apiSecret = config.apiSecret,
+                        symbol = symbol,
+                        side = ladoReal,
+                        quantity = qtyStr,
+                        marginType = config.tipoMargen
+                    )
+                    AlertManager.agregarLog("✅ $symbol CERRADA MANUALMENTE (Cierre Garantizado).")
+                } else {
+                    AlertManager.agregarLog("⚠️ $symbol ya no contaba con cantidad activa en Binance.")
+                }
+                marcarComoCerrada(context, symbol)
+            } catch (e: Exception) {
+                AlertManager.agregarLog("❌ Error en cierre manual de $symbol: ${e.message}")
             }
         }
     }
