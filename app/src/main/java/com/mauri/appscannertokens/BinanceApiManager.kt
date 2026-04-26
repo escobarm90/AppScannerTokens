@@ -80,12 +80,11 @@ object BinanceApiManager {
                         val pricePrec = symObj.get("pricePrecision").asInt
                         precisionCache[sym] = Pair(qtyPrec, pricePrec)
                     }
-                    return@use precisionCache[symbol] ?: Pair(3, 4)
                 }
             }
         } catch (_: Exception) {
         }
-        return@withContext Pair(3, 4)
+        return@withContext precisionCache[symbol] ?: Pair(3, 4)
     }
 
     suspend fun obtenerSaldoUSDT(apiKey: String, apiSecret: String): Double =
@@ -167,11 +166,11 @@ object BinanceApiManager {
 
             val ts2 = System.currentTimeMillis()
             val (qtyPrec, pricePrec) = obtenerPrecisiones(symbol)
+            
             val qtyStr = BigDecimal.valueOf(quantity).setScale(qtyPrec, java.math.RoundingMode.DOWN)
                 .stripTrailingZeros().toPlainString()
-            val priceStr =
-                BigDecimal.valueOf(price).setScale(pricePrec, java.math.RoundingMode.DOWN)
-                    .stripTrailingZeros().toPlainString()
+            val priceStr = BigDecimal.valueOf(price).setScale(pricePrec, java.math.RoundingMode.HALF_UP)
+                .stripTrailingZeros().toPlainString()
 
             var qOrden = "symbol=$symbol&side=$side&type=$orderType&quantity=$qtyStr"
             val form =
@@ -192,9 +191,12 @@ object BinanceApiManager {
                 val body = res.body?.string() ?: ""
                 if (res.isSuccessful) {
                     val orderId = JSONObject(body).optLong("orderId", 0L)
+                    AlertManager.agregarLog("✅ ORDEN ENVIADA ($orderType): $symbol | ID: $orderId")
                     Triple(true, "¡Orden $orderType de $symbol enviada!", orderId)
                 } else {
-                    Triple(false, "Error: ${JSONObject(body).optString("msg")}", 0L)
+                    val msg = JSONObject(body).optString("msg", "Error desconocido")
+                    AlertManager.agregarLog("❌ ERROR ORDEN ($orderType): $symbol | $msg")
+                    Triple(false, "Error: $msg", 0L)
                 }
             }
             return@withContext result
@@ -380,7 +382,7 @@ object BinanceApiManager {
             val ts = System.currentTimeMillis()
             val (_, pricePrec) = obtenerPrecisiones(symbol)
             val priceStr =
-                BigDecimal.valueOf(stopPrice).setScale(pricePrec, java.math.RoundingMode.DOWN)
+                BigDecimal.valueOf(stopPrice).setScale(pricePrec, java.math.RoundingMode.HALF_UP)
                     .stripTrailingZeros().toPlainString()
 
             val q =
@@ -429,10 +431,16 @@ object BinanceApiManager {
                 val code = json.optInt("code", 0)
 
                 if (code == -2021) {
-                    AlertManager.agregarLog("⚠️ [CRÍTICO] $type para $symbol se dispararía de inmediato. Ejecutando CIERRE MARKET de emergencia...")
-                    val (mktExito, mktMsj, _) = ejecutarOrden(apiKey, apiSecret, symbol, side, "MARKET", quantity, 0.0, marginType)
-                    if (mktExito) return true
-                    AlertManager.agregarLog("❌ Falló cierre market de emergencia: $mktMsj")
+                    val checkPos = obtenerCantidadPosicion(apiKey, apiSecret, symbol) ?: 0.0
+                    if (kotlin.math.abs(checkPos) > 0) {
+                        AlertManager.agregarLog("⚠️ [CRÍTICO] $type se dispararía de inmediato. Ejecutando MARKET close...")
+                        val (mktExito, mktMsj, _) = ejecutarOrden(apiKey, apiSecret, symbol, side, "MARKET", quantity, 0.0, marginType)
+                        if (mktExito) return true
+                        AlertManager.agregarLog("❌ Falló cierre market: $mktMsj")
+                    } else {
+                        AlertManager.agregarLog("⚠️ [INFO] Shield $type ignorado (Precio ya cruzado y sin posición).")
+                        return true // Consideramos "exito" porque no necesitamos escudo si no hay posición
+                    }
                 }
             } catch (e: Exception) {}
 
