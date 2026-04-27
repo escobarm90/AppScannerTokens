@@ -126,7 +126,7 @@ fun ConfigScreen(
                     config = config.copy(porcentajeInversion = it)
                 }
                 NumberStepper("% Riesgo Máx. de Billetera", config.riesgoMaximoBilletera, 0.5, 0.5) {
-                    config = config.copy(riesgoMaximoBilletera = it)
+                    config = config.copy(riesgoMaximoBilletera = it.coerceAtMost(RiskLimits.MAX_WALLET_RISK_PCT))
                 }
                 NumberStepper("Multiplicador Take Profit", config.multiplicadorTp, 0.1, 0.1) {
                     config = config.copy(multiplicadorTp = it)

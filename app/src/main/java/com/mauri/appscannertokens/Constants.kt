@@ -20,3 +20,7 @@ object PrefKeys {
     const val VOLUMEN_RATIO_MINIMO = "volumen_ratio_minimo"
     const val RIESGO_MAXIMO_BILLETERA = "riesgo_maximo_billetera"
 }
+
+object RiskLimits {
+    const val MAX_WALLET_RISK_PCT = 2.0
+}

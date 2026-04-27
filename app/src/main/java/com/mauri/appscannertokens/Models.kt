@@ -52,6 +52,7 @@ data class AlertData(
     val sl: Double,
     val velasEstimadas: Int,
     val timeframe: String,
+    val atr: Double = 0.0,
     val timestamp: Long = System.currentTimeMillis()
 )
 
@@ -69,7 +70,9 @@ data class ActivePosition(
     val isClosed: Boolean = false,
     val apalancamiento: Int,
     val orderId: Long,
-    val quantity: Double
+    val quantity: Double,
+    val atr: Double = 0.0,
+    val stopLossOrderId: Long = 0L
 )
 
 data class KlineData(
@@ -89,6 +92,13 @@ data class OrderBookSnapshot(
 data class TradeFlowSnapshot(
     val totalQty: Double,
     val buyPercent: Double
+)
+
+data class BinancePositionSnapshot(
+    val symbol: String,
+    val positionAmt: Double,
+    val entryPrice: Double,
+    val markPrice: Double
 )
 
 data class TechnicalSignal(
@@ -133,8 +143,45 @@ data class OrderExecutionResult(
 data class StopOrderResult(
     val success: Boolean,
     val message: String,
-    val code: Int = 0
+    val code: Int = 0,
+    val orderId: Long = 0L,
+    val clientOrderId: String = "",
+    val stopPrice: Double = 0.0
 )
+
+data class OpenOrder(
+    val orderId: Long,
+    val clientOrderId: String,
+    val symbol: String,
+    val side: String,
+    val type: String,
+    val stopPrice: Double,
+    val closePosition: Boolean
+)
+
+data class StopLossPlan(
+    val stopPrice: Double,
+    val riskPct: Double,
+    val maxLossUsdt: Double,
+    val stopDistance: Double
+)
+
+sealed class StopLossProtectionResult {
+    data class Protected(
+        val stopPrice: Double,
+        val stopOrderId: Long,
+        val entryPrice: Double,
+        val currentPrice: Double,
+        val positionAmount: Double
+    ) : StopLossProtectionResult()
+
+    data class EmergencyCloseRequired(
+        val reason: String,
+        val quantity: Double
+    ) : StopLossProtectionResult()
+
+    data class NoPosition(val reason: String) : StopLossProtectionResult()
+}
 
 data class OrderSizing(
     val marginUsdt: Double,

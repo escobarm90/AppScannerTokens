@@ -36,7 +36,8 @@ object PositionManager {
         stopLoss: Double,
         leverage: Int,
         orderId: Long,
-        quantity: Double
+        quantity: Double,
+        atr: Double
     ) {
         if (PositionRepository.activePositions().any { it.symbol == symbol }) return
 
@@ -50,7 +51,8 @@ object PositionManager {
             currentSl = stopLoss,
             apalancamiento = leverage,
             orderId = orderId,
-            quantity = quantity
+            quantity = quantity,
+            atr = atr
         )
         PositionRepository.add(position)
         LogRepository.add("Posicion agregada al monitor: $symbol")
@@ -131,7 +133,6 @@ object PositionManager {
 
         monitorJobs[position.symbol] = scope.launch {
             PositionMonitor(
-                context = context,
                 config = config,
                 initialPosition = position,
                 accountService = AppGraph.accountService,
@@ -140,7 +141,15 @@ object PositionManager {
                 tickerWebSocket = AppGraph.tickerWebSocket,
                 positionRepository = PositionRepository,
                 logRepository = LogRepository,
-                trailingStopEngine = TrailingStopEngine()
+                trailingStopEngine = TrailingStopEngine(),
+                stopLossGuard = StopLossGuard(
+                    accountService = AppGraph.accountService,
+                    orderService = AppGraph.orderService,
+                    marketDataService = AppGraph.marketDataService,
+                    tickerWebSocket = AppGraph.tickerWebSocket,
+                    logRepository = LogRepository,
+                    calculator = StopLossCalculator()
+                )
             ).run(isResume)
         }
     }
