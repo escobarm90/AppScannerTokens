@@ -1,6 +1,13 @@
 package com.mauri.appscannertokens
 
 import android.content.Context
+import com.mauri.appscannertokens.data.remote.BinanceAccountService
+import com.mauri.appscannertokens.data.remote.BinanceMarketDataService
+import com.mauri.appscannertokens.data.remote.BinanceOrderService
+import com.mauri.appscannertokens.data.remote.BinanceRestClient
+import com.mauri.appscannertokens.data.remote.BinanceTickerWebSocket
+import com.mauri.appscannertokens.data.repository.ConfigRepository
+import com.mauri.appscannertokens.data.repository.PositionRepository
 
 object AppGraph {
     private var initialized = false

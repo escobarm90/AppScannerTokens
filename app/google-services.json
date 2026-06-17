@@ -1,13 +1,13 @@
 {
   "project_info": {
-    "project_number": "287698286941",
-    "project_id": "bot-trading-mauri",
-    "storage_bucket": "bot-trading-mauri.firebasestorage.app"
+    "project_number": "855012280038",
+    "project_id": "appscannertokens-5f10b",
+    "storage_bucket": "appscannertokens-5f10b.firebasestorage.app"
   },
   "client": [
     {
       "client_info": {
-        "mobilesdk_app_id": "1:287698286941:android:4cc503d766f98b0764d0b4",
+        "mobilesdk_app_id": "1:855012280038:android:eb73e1f98a7e40c9481d27",
         "android_client_info": {
           "package_name": "com.mauri.appscannertokens"
         }
@@ -15,7 +15,7 @@
       "oauth_client": [],
       "api_key": [
         {
-          "current_key": "AIzaSyATAICNADyyqK4UzokTnRlqXd5U_h-2jt8"
+          "current_key": "AIzaSyBCcpLVL9fStnxUUJ4YTEXC_cgBw3Pwdf8"
         }
       ],
       "services": {

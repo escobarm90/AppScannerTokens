@@ -10,21 +10,50 @@
   </component>
   <component name="ChangeListManager">
     <list default="true" id="f47cbd80-7e7b-4408-8a49-fc9584e2fa18" name="Changes" comment="Version 3.0 Funcionando">
+      <change beforePath="$PROJECT_DIR$/.idea/caches/deviceStreaming.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/caches/deviceStreaming.xml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/.idea/planningMode.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/planningMode.xml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/app/build.gradle" beforeDir="false" afterPath="$PROJECT_DIR$/app/build.gradle" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/app/google-services.json" beforeDir="false" afterPath="$PROJECT_DIR$/app/google-services.json" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/app/src/main/AndroidManifest.xml" beforeDir="false" afterPath="$PROJECT_DIR$/app/src/main/AndroidManifest.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/app/src/main/java/com/mauri/appscannertokens/AlertCard.kt" beforeDir="false" afterPath="$PROJECT_DIR$/app/src/main/java/com/mauri/appscannertokens/AlertCard.kt" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/app/src/main/java/com/mauri/appscannertokens/AlertManager.kt" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/app/src/main/java/com/mauri/appscannertokens/BinanceApiManager.kt" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/app/src/main/java/com/mauri/appscannertokens/BinanceWebSocketManager.kt" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/app/src/main/java/com/mauri/appscannertokens/ConfigActivity.kt" beforeDir="false" afterPath="$PROJECT_DIR$/app/src/main/java/com/mauri/appscannertokens/ConfigActivity.kt" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/app/src/main/java/com/mauri/appscannertokens/ConfigScreen.kt" beforeDir="false" afterPath="$PROJECT_DIR$/app/src/main/java/com/mauri/appscannertokens/ConfigScreen.kt" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/app/src/main/java/com/mauri/appscannertokens/ConfigViewModel.kt" beforeDir="false" afterPath="$PROJECT_DIR$/app/src/main/java/com/mauri/appscannertokens/ConfigViewModel.kt" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/app/src/main/java/com/mauri/appscannertokens/MainActivity.kt" beforeDir="false" afterPath="$PROJECT_DIR$/app/src/main/java/com/mauri/appscannertokens/MainActivity.kt" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/app/src/main/java/com/mauri/appscannertokens/Models.kt" beforeDir="false" afterPath="$PROJECT_DIR$/app/src/main/java/com/mauri/appscannertokens/Models.kt" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/app/src/main/java/com/mauri/appscannertokens/PositionManager.kt" beforeDir="false" afterPath="$PROJECT_DIR$/app/src/main/java/com/mauri/appscannertokens/PositionManager.kt" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/app/src/main/java/com/mauri/appscannertokens/StrategyAnalizer.kt" beforeDir="false" afterPath="$PROJECT_DIR$/app/src/main/java/com/mauri/appscannertokens/StrategyAnalizer.kt" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/app/src/main/java/com/mauri/appscannertokens/TradingScannerService.kt" beforeDir="false" afterPath="$PROJECT_DIR$/app/src/main/java/com/mauri/appscannertokens/TradingScannerService.kt" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/gradle/wrapper/gradle-wrapper.properties" beforeDir="false" afterPath="$PROJECT_DIR$/gradle/wrapper/gradle-wrapper.properties" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/app/src/main/java/com/mauri/appscannertokens/AlertCard.kt" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/app/src/main/java/com/mauri/appscannertokens/AlertNotifier.kt" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/app/src/main/java/com/mauri/appscannertokens/AlertRepository.kt" beforeDir="false" afterPath="$PROJECT_DIR$/app/src/main/java/com/mauri/appscannertokens/AlertRepository.kt" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/app/src/main/java/com/mauri/appscannertokens/AppGraph.kt" beforeDir="false" afterPath="$PROJECT_DIR$/app/src/main/java/com/mauri/appscannertokens/AppGraph.kt" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/app/src/main/java/com/mauri/appscannertokens/BinanceAccountService.kt" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/app/src/main/java/com/mauri/appscannertokens/BinanceKlineWebSocket.kt" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/app/src/main/java/com/mauri/appscannertokens/BinanceMarketDataService.kt" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/app/src/main/java/com/mauri/appscannertokens/BinanceOrderService.kt" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/app/src/main/java/com/mauri/appscannertokens/BinanceRestClient.kt" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/app/src/main/java/com/mauri/appscannertokens/BinanceSigner.kt" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/app/src/main/java/com/mauri/appscannertokens/BinanceTickerWebSocket.kt" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/app/src/main/java/com/mauri/appscannertokens/ConfigActivity.kt" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/app/src/main/java/com/mauri/appscannertokens/ConfigRepository.kt" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/app/src/main/java/com/mauri/appscannertokens/ConfigScreen.kt" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/app/src/main/java/com/mauri/appscannertokens/ConfigViewModel.kt" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/app/src/main/java/com/mauri/appscannertokens/Constants.kt" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/app/src/main/java/com/mauri/appscannertokens/LogRepository.kt" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/app/src/main/java/com/mauri/appscannertokens/MainActivity.kt" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/app/src/main/java/com/mauri/appscannertokens/Models.kt" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/app/src/main/java/com/mauri/appscannertokens/MonitorViewModel.kt" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/app/src/main/java/com/mauri/appscannertokens/MyFirebaseMessagingService.kt" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/app/src/main/java/com/mauri/appscannertokens/OrderSizingCalculator.kt" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/app/src/main/java/com/mauri/appscannertokens/PositionManager.kt" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/app/src/main/java/com/mauri/appscannertokens/PositionMonitor.kt" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/app/src/main/java/com/mauri/appscannertokens/PositionRepository.kt" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/app/src/main/java/com/mauri/appscannertokens/RiskCalculator.kt" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/app/src/main/java/com/mauri/appscannertokens/ScannerDebugLogger.kt" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/app/src/main/java/com/mauri/appscannertokens/ScannerEngine.kt" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/app/src/main/java/com/mauri/appscannertokens/SignalValidator.kt" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/app/src/main/java/com/mauri/appscannertokens/StopLossCalculator.kt" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/app/src/main/java/com/mauri/appscannertokens/StopLossGuard.kt" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/app/src/main/java/com/mauri/appscannertokens/StrategyAnalizer.kt" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/app/src/main/java/com/mauri/appscannertokens/TradingScannerService.kt" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/app/src/main/java/com/mauri/appscannertokens/TrailingStopEngine.kt" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/app/src/main/java/com/mauri/appscannertokens/UserConfig.kt" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/build.gradle" beforeDir="false" afterPath="$PROJECT_DIR$/build.gradle" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/google-services.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/local.properties" beforeDir="false" afterPath="$PROJECT_DIR$/local.properties" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -34,7 +63,7 @@
   <component name="ClangdSettings">
     <option name="formatViaClangd" value="false" />
   </component>
-  <component name="ExecutionTargetManager" SELECTED_TARGET="device_and_snapshot_combo_box_target[PhysicalDevice::serial=R5CW81L938R]" />
+  <component name="ExecutionTargetManager" SELECTED_TARGET="device_and_snapshot_combo_box_target[]" />
   <component name="ExternalProjectsData">
     <projectState path="$PROJECT_DIR$">
       <ProjectState />
@@ -62,11 +91,13 @@
   <component name="GithubPullRequestsUISettings">{
   &quot;selectedUrlAndAccountId&quot;: {
     &quot;url&quot;: &quot;https://github.com/escobarm90/AppScannerTokens.git&quot;,
-    &quot;accountId&quot;: &quot;797a8c87-e548-4657-aaed-1dd1220bed0a&quot;
+    &quot;accountId&quot;: &quot;b4f30b4c-ec47-4197-8875-3a7759da955f&quot;
   }
 }</component>
   <component name="ProblemsViewState">
+    <option name="proportion" value="0.6413678" />
     <option name="selectedTabId" value="CurrentFile" />
+    <option name="showPreview" value="true" />
   </component>
   <component name="ProjectColorInfo">{
   &quot;associatedIndex&quot;: 3
@@ -76,33 +107,35 @@
     <option name="hideEmptyMiddlePackages" value="true" />
     <option name="showLibraryContents" value="true" />
   </component>
-  <component name="PropertiesComponent">{
-  &quot;keyToString&quot;: {
-    &quot;AnalyzeApkAction.lastApkPath&quot;: &quot;C:/Users/yomau/Desktop/Crypto/buscador2/TradingAlertsApp/app/build/intermediates/apk/debug/app-debug.apk&quot;,
-    &quot;Android App.New Run Config.executor&quot;: &quot;Run&quot;,
-    &quot;Android App.app.executor&quot;: &quot;Run&quot;,
-    &quot;Gradle.Configure Daemon JVM Criteria.executor&quot;: &quot;Run&quot;,
-    &quot;GradleDaemonJvmCriteriaMigrationNotification.isNotificationDisabled&quot;: &quot;true&quot;,
-    &quot;Logcat.SavePath&quot;: &quot;C:\\Users\\yomau\\Desktop&quot;,
-    &quot;ModuleVcsDetector.initialDetectionPerformed&quot;: &quot;true&quot;,
-    &quot;RunOnceActivity.ShowReadmeOnStart&quot;: &quot;true&quot;,
-    &quot;RunOnceActivity.TerminalTabsStorage.copyFrom.TerminalArrangementManager.252&quot;: &quot;true&quot;,
-    &quot;RunOnceActivity.cidr.known.project.marker&quot;: &quot;true&quot;,
-    &quot;RunOnceActivity.git.unshallow&quot;: &quot;true&quot;,
-    &quot;RunOnceActivity.readMode.enableVisualFormatting&quot;: &quot;true&quot;,
-    &quot;SHARE_PROJECT_CONFIGURATION_FILES&quot;: &quot;true&quot;,
-    &quot;cf.first.check.clang-format&quot;: &quot;false&quot;,
-    &quot;cidr.known.project.marker&quot;: &quot;true&quot;,
-    &quot;com.google.services.firebase.aqiPopupShown&quot;: &quot;true&quot;,
-    &quot;git-widget-placeholder&quot;: &quot;master&quot;,
-    &quot;ignore.virus.scanning.warn.message&quot;: &quot;true&quot;,
-    &quot;kotlin-language-version-configured&quot;: &quot;true&quot;,
-    &quot;last_opened_file_path&quot;: &quot;C:/Users/yomau/Desktop/Crypto/buscador2/TradingAlertsApp&quot;,
-    &quot;settings.editor.selected.configurable&quot;: &quot;preferences.pluginManager&quot;
+  <component name="PropertiesComponent"><![CDATA[{
+  "keyToString": {
+    "AnalyzeApkAction.lastApkPath": "C:/Users/yomau/Desktop/Crypto/buscador2/TradingAlertsApp/app/build/intermediates/apk/debug/app-debug.apk",
+    "Android App.New Run Config.executor": "Run",
+    "Android App.app.executor": "Run",
+    "Gradle.Configure Daemon JVM Criteria.executor": "Run",
+    "GradleDaemonJvmCriteriaMigrationNotification.isNotificationDisabled": "true",
+    "Logcat.SavePath": "C:\\Users\\yomau\\Desktop",
+    "ModuleVcsDetector.initialDetectionPerformed": "true",
+    "RunOnceActivity.ShowReadmeOnStart": "true",
+    "RunOnceActivity.TerminalTabsStorage.copyFrom.TerminalArrangementManager.252": "true",
+    "RunOnceActivity.cidr.known.project.marker": "true",
+    "RunOnceActivity.git.unshallow": "true",
+    "RunOnceActivity.readMode.enableVisualFormatting": "true",
+    "SHARE_PROJECT_CONFIGURATION_FILES": "true",
+    "cf.first.check.clang-format": "false",
+    "cidr.known.project.marker": "true",
+    "com.google.services.firebase.aqiPopupShown": "true",
+    "git-widget-placeholder": "master",
+    "ignore.virus.scanning.warn.message": "true",
+    "kotlin-language-version-configured": "true",
+    "last_opened_file_path": "C:/Users/antony/StudioProjects/AppScannerTokens",
+    "settings.editor.selected.configurable": "preferences.pluginManager"
   }
-}</component>
+}]]></component>
   <component name="RecentsManager">
     <key name="MoveFile.RECENT_KEYS">
+      <recent name="C:\Users\antony\StudioProjects\AppScannerTokens\app\src\main\java\com\mauri\appscannertokens" />
+      <recent name="C:\Users\antony\StudioProjects\AppScannerTokens\app" />
       <recent name="C:\Users\yomau\androidstudioprojects\AppScannerTokens" />
     </key>
   </component>
@@ -174,7 +207,7 @@
       </method>
     </configuration>
     <configuration name="app" type="AndroidRunConfigurationType" factoryName="Android App" activateToolWindowBeforeRun="false">
-      <module name="AppScannerTokens.app" />
+      <module name="AppScannerTokens.app.androidTest" />
       <option name="ANDROID_RUN_CONFIGURATION_SCHEMA_VERSION" value="1" />
       <option name="DEPLOY" value="true" />
       <option name="DEPLOY_APK_FROM_BUNDLE" value="false" />
@@ -696,12 +729,12 @@
         </entry>
         <entry key="com.mauri.appscannertokens">
           <value>
-            <CheckInfo lastCheckTimestamp="1776776972670" />
+            <CheckInfo lastCheckTimestamp="1781665130988" />
           </value>
         </entry>
         <entry key="com.mauri.appscannertokens.test">
           <value>
-            <CheckInfo lastCheckTimestamp="1776776972664" />
+            <CheckInfo lastCheckTimestamp="1781665130988" />
           </value>
         </entry>
         <entry key="com.mauri.tradingbot">

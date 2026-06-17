@@ -3,10 +3,12 @@ package com.mauri.appscannertokens
 import android.content.Context
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
+import com.mauri.appscannertokens.domain.model.AlertData
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
+import kotlin.collections.emptyList
 
 object AlertRepository {
     private val alertsState = MutableStateFlow<List<AlertData>>(emptyList())

@@ -5,6 +5,11 @@ plugins {
     id 'org.jetbrains.kotlin.plugin.compose'
 }
 
+// 🔥 Nueva forma de definir el Target de Kotlin (Reemplaza a kotlinOptions)
+kotlin {
+    jvmToolchain(17)
+}
+
 android {
     namespace 'com.mauri.appscannertokens'
     compileSdk 35
@@ -22,19 +27,16 @@ android {
         compose true
     }
 
-    // 🔥 EMPAREJA EL COMPILADOR CON KOTLIN 1.9.22
-
+    // 🔥 EMPAREJA EL COMPILADOR CON KOTLIN 1.9.22 / 2.0+
     compileOptions {
         sourceCompatibility JavaVersion.VERSION_17
         targetCompatibility JavaVersion.VERSION_17
         coreLibraryDesugaringEnabled true
     }
-    kotlinOptions {
-        jvmTarget = '17'
-    }
 }
 
 dependencies {
+    implementation("androidx.security:security-crypto-ktx:1.1.0")
     implementation 'androidx.compose.material3:material3:1.4.0'
     coreLibraryDesugaring 'com.android.tools:desugar_jdk_libs:2.1.5'
 
@@ -44,12 +46,11 @@ dependencies {
     implementation 'androidx.core:core-ktx:1.13.1' // Requerido para extensiones KTX
 
     // Firebase BoM
-    implementation platform('com.google.firebase:firebase-bom:33.1.2')
+    implementation platform('com.google.firebase:firebase-bom:34.14.1')
     implementation 'com.google.firebase:firebase-analytics'
     implementation 'com.google.firebase:firebase-messaging'
     implementation 'com.google.firebase:firebase-installations'
     implementation 'com.google.firebase:firebase-database'
-
 
     // DataStore y Lifecycle
     implementation 'androidx.datastore:datastore-preferences:1.1.1'
@@ -61,7 +62,6 @@ dependencies {
     // Trading Indicators (ta4j)
     implementation 'org.ta4j:ta4j-core:0.15'
 
-
     // Networking & JSON
     implementation 'com.squareup.okhttp3:okhttp:4.12.0'
     implementation 'com.google.code.gson:gson:2.11.0'
@@ -72,8 +72,10 @@ dependencies {
     implementation 'androidx.compose.ui:ui'
     implementation 'androidx.compose.material3:material3'
     implementation 'androidx.activity:activity-compose:1.9.1'
+
     // Soluciona el error Unresolved reference 'Icons':
     implementation 'androidx.compose.material:material-icons-extended'
+
     // Corrutinas
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
 }
