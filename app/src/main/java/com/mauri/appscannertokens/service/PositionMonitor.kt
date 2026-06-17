@@ -1,19 +1,9 @@
-package com.mauri.appscannertokens.service
+package com.mauri.appscannertokens.engine
 
 import com.mauri.appscannertokens.domain.model.*
 import com.mauri.appscannertokens.data.repository.*
 import com.mauri.appscannertokens.data.remote.*
-import com.mauri.appscannertokens.presentation.ui.*
-import com.mauri.appscannertokens.presentation.viewmodel.*
-import com.mauri.appscannertokens.presentation.notifier.*
-import com.mauri.appscannertokens.engine.*
-import com.mauri.appscannertokens.service.*
-
-
-import kotlinx.coroutines.currentCoroutineContext
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.isActive
-import kotlin.math.abs
+import kotlinx.coroutines.*
 
 class PositionMonitor(
     private val config: UserConfig,
@@ -25,295 +15,100 @@ class PositionMonitor(
     private val positionRepository: PositionRepository,
     private val logRepository: LogRepository,
     private val trailingStopEngine: TrailingStopEngine,
-    private val stopLossGuard: StopLossGuard
+    private val stopLossGuard: StopLossGuard // Se mantiene por inyección pero NO SE USARA PARA CERRAR
 ) {
-    suspend fun run(isResume: Boolean) {
-        val symbol = initialPosition.symbol
-        val isLong = initialPosition.side.uppercase() in listOf("LONG", "BUY")
-        val exitSide = if (isLong) "SELL" else "BUY"
+    suspend fun run(isResume: Boolean) = coroutineScope {
+        var position = initialPosition
 
-        var entryPrice = initialPosition.entryPrice
-        var dynamicTp = initialPosition.dynamicTp
-        var dynamicSl = initialPosition.currentSl
-        var trailingLevel = initialPosition.trailingLevel
-        var stopLossOrderId = initialPosition.stopLossOrderId
-        var lastTrailingAt = 0L
-        var lastPositionAmount = 0.0
+        logRepository.add("Monitor Live [${position.symbol}]. Control y cierres delegados a BINANCE.")
 
-        if (!isResume) {
-            val openedSnapshot = waitUntilPositionOpens(symbol) ?: return
-            val protection = stopLossGuard.calculateAndPlaceInitial(
-                config = config,
-                position = initialPosition,
-                snapshot = openedSnapshot,
-                exitSide = exitSide
-            )
-            val protectedState = applyProtectionResult(symbol, exitSide, protection) ?: return
-            entryPrice = protectedState.entryPrice
-            dynamicSl = protectedState.stopPrice
-            stopLossOrderId = protectedState.stopOrderId
-            lastPositionAmount = if (isLong) protectedState.quantity else -protectedState.quantity
+        while (isActive && !position.isClosed) {
+            val currentPrice = tickerWebSocket.price(position.symbol)
 
-            positionRepository.update(symbol) {
-                it.copy(
-                    entryPrice = entryPrice,
-                    currentPrice = protectedState.currentPrice,
-                    currentSl = dynamicSl,
-                    dynamicTp = dynamicTp,
-                    stopLossOrderId = stopLossOrderId,
-                    quantity = protectedState.quantity
-                )
-            }
-            placeTakeProfit(symbol, exitSide, dynamicTp)
-        } else {
-            val snapshot = accountService.getPositionSnapshot(config.apiKey, config.apiSecret, symbol)
-            if (snapshot != null && snapshot.positionAmt != 0.0) {
-                entryPrice = snapshot.entryPrice.takeIf { it > 0.0 } ?: entryPrice
-                val currentPrice = currentPrice(symbol, snapshot)
-                val protection = stopLossGuard.calculateAndPlaceInitial(
-                    config = config,
-                    position = initialPosition.copy(
-                        entryPrice = entryPrice,
-                        currentPrice = currentPrice,
-                        currentSl = dynamicSl,
-                        quantity = abs(snapshot.positionAmt)
-                    ),
-                    snapshot = snapshot,
-                    exitSide = exitSide
-                )
-                val protectedState = applyProtectionResult(symbol, exitSide, protection) ?: return
-                dynamicSl = protectedState.stopPrice
-                stopLossOrderId = protectedState.stopOrderId
-                lastPositionAmount = snapshot.positionAmt
-                positionRepository.update(symbol) {
-                    it.copy(
-                        entryPrice = entryPrice,
-                        currentPrice = protectedState.currentPrice,
-                        currentSl = dynamicSl,
-                        stopLossOrderId = stopLossOrderId,
-                        quantity = abs(snapshot.positionAmt)
-                    )
+            if (currentPrice != null && currentPrice > 0) {
+                // 1. Actualizar métricas visuales (Ganancia, Precio en Vivo, etc)
+                val isLong = position.side == "LONG"
+                val pnlNeto = if (isLong) {
+                    (currentPrice - position.entryPrice) * position.quantity
+                } else {
+                    (position.entryPrice - currentPrice) * position.quantity
                 }
-                placeTakeProfit(symbol, exitSide, dynamicTp)
-            }
-        }
+                val margin = (position.entryPrice * position.quantity) / position.apalancamiento
+                val roePct = if (margin > 0) (pnlNeto / margin) * 100 else 0.0
 
-        logRepository.add("Vigilancia activa para $symbol.")
-        while (currentCoroutineContext().isActive) {
-            delay(300)
+                position = position.copy(
+                    currentPrice = currentPrice,
+                    pnlNeto = pnlNeto,
+                    roePct = roePct
+                )
+                positionRepository.update(position.symbol) { position }
 
-            val snapshot = accountService.getPositionSnapshot(config.apiKey, config.apiSecret, symbol)
-            if (snapshot == null) {
-                logRepository.add("No se pudo confirmar posicion $symbol; se mantiene vigilancia.")
-                continue
-            }
+                // 2. Verificar Trailing Stop (Mover el SL real en los servidores de Binance)
+                val newSl = trailingStopEngine.calculateNewStopLoss(position, currentPrice)
 
-            lastPositionAmount = snapshot.positionAmt
-            if (lastPositionAmount == 0.0) {
-                markClosed(symbol)
-                logRepository.add("Posicion $symbol cerrada en Binance.")
-                break
-            }
+                if (newSl != null && newSl != position.currentSl) {
+                    val newLevel = trailingStopEngine.getNewLevel(position, currentPrice)
+                    logRepository.add(">>> Trailing activado al $newLevel%. Moviendo SL físico a $newSl")
 
-            val currentPrice = currentPrice(symbol, snapshot)
-            if (currentPrice == 0.0) continue
+                    val closeSide = if (isLong) "SELL" else "BUY"
+                    val openOrders = orderService.getOpenOrders(config.apiKey, config.apiSecret, position.symbol)
 
-            updatePositionPnl(symbol, currentPrice, lastPositionAmount, entryPrice)
+                    // Buscar la orden vieja de Stop Loss en Binance
+                    val slOrder = openOrders?.firstOrNull { it.type == "STOP_MARKET" && it.closePosition }
 
-            val hitSl = if (isLong) currentPrice <= dynamicSl else currentPrice >= dynamicSl
-            val hitTp = if (isLong) currentPrice >= dynamicTp else currentPrice <= dynamicTp
-            if (hitSl || hitTp) {
-                val reason = if (hitSl) "SL virtual" else "TP virtual"
-                logRepository.add("$reason alcanzado en $symbol. Ejecutando cierre MARKET de respaldo.")
-                closeAtMarket(symbol, exitSide, abs(lastPositionAmount))
-                markClosed(symbol)
-                break
-            }
-
-            val trailingUpdate = trailingStopEngine.calculateUpdate(
-                entryPrice = entryPrice,
-                currentPrice = currentPrice,
-                currentTp = dynamicTp,
-                isLong = isLong,
-                currentLevel = trailingLevel,
-                lastUpdateAt = lastTrailingAt
-            ) ?: continue
-
-            if (marketAlreadyCrossed(symbol, isLong, trailingUpdate)) {
-                closeAtMarket(symbol, exitSide, abs(lastPositionAmount))
-                markClosed(symbol)
-                break
-            }
-
-            val movedStop = stopLossGuard.moveStopLoss(
-                config = config,
-                position = initialPosition.copy(entryPrice = entryPrice, currentSl = dynamicSl),
-                exitSide = exitSide,
-                entryPrice = entryPrice,
-                currentPrice = currentPrice,
-                quantity = abs(lastPositionAmount),
-                stopPrice = trailingUpdate.newSl,
-                previousStopOrderId = stopLossOrderId
-            )
-
-            when (movedStop) {
-                is StopLossProtectionResult.Protected -> {
-                    dynamicSl = movedStop.stopPrice
-                    stopLossOrderId = movedStop.stopOrderId
-                    dynamicTp = trailingUpdate.newTp
-                    trailingLevel = trailingUpdate.newLevel
-                    lastTrailingAt = System.currentTimeMillis()
-
-                    positionRepository.update(symbol) {
-                        it.copy(
-                            dynamicTp = dynamicTp,
-                            currentSl = dynamicSl,
-                            trailingLevel = trailingLevel,
-                            stopLossOrderId = stopLossOrderId
-                        )
+                    if (slOrder != null) {
+                        // Paso A: Borrar SL viejo
+                        val canceled = orderService.cancelOrder(config.apiKey, config.apiSecret, position.symbol, slOrder.orderId)
+                        if (canceled) {
+                            // Paso B: Colocar SL nuevo para asegurar la ganancia local
+                            val slResult = orderService.placeStopLoss(config.apiKey, config.apiSecret, position.symbol, closeSide, newSl)
+                            if (slResult.success) {
+                                logRepository.add("EXITO: SL movido en Binance. Ganancia asegurada.")
+                                position = position.copy(currentSl = newSl, trailingLevel = newLevel)
+                                positionRepository.update(position.symbol) { position }
+                            } else {
+                                logRepository.add("EMERGENCIA FATAL: Se borró el SL viejo pero Binance rechazó el nuevo: ${slResult.message}. Forzando cierre para proteger capital.")
+                                emergencyClose(position, closeSide)
+                                break
+                            }
+                        } else {
+                            logRepository.add("ERROR: No se pudo cancelar el SL anterior en Binance. Reintentando en próximo ciclo.")
+                        }
+                    } else {
+                        logRepository.add("EMERGENCIA: No se encontró el SL original en Binance. Alguien lo borró manual o falló API. Forzando cierre.")
+                        emergencyClose(position, closeSide)
+                        break
                     }
-                    placeTakeProfit(symbol, exitSide, dynamicTp)
-                    logRepository.add("Trailing actualizado en $symbol. Nivel $trailingLevel.")
-                }
-                is StopLossProtectionResult.EmergencyCloseRequired -> {
-                    logRepository.add("EMERGENCIA SL $symbol: ${movedStop.reason}")
-                    closeAtMarket(symbol, exitSide, movedStop.quantity)
-                    markClosed(symbol)
-                    break
-                }
-                is StopLossProtectionResult.NoPosition -> {
-                    logRepository.add("Trailing pausado en $symbol: ${movedStop.reason}")
                 }
             }
-        }
-    }
 
-    private suspend fun waitUntilPositionOpens(symbol: String): BinancePositionSnapshot? {
-        repeat(900) {
-            val snapshot = accountService.getPositionSnapshot(config.apiKey, config.apiSecret, symbol)
-            val status = accountService.getOrderStatus(config.apiKey, config.apiSecret, symbol, initialPosition.orderId)
-
-            if (snapshot != null && snapshot.positionAmt != 0.0) {
-                if (status == "PARTIALLY_FILLED") {
-                    orderService.cancelOrder(config.apiKey, config.apiSecret, symbol, initialPosition.orderId)
-                    logRepository.add("Orden $symbol parcialmente ejecutada; remanente cancelado antes de proteger SL.")
-                }
-                logRepository.add("Posicion $symbol abierta. Colocando SL fisico prioritario.")
-                return snapshot
-            }
-
-            if (status in listOf("CANCELED", "REJECTED", "EXPIRED")) {
-                orderService.cancelOpenOrdersStrictly(config.apiKey, config.apiSecret, symbol)
-                positionRepository.remove(symbol)
-                logRepository.add("Orden $symbol cancelada o expirada.")
-                return null
-            }
-
-            delay(500)
-        }
-
-        logRepository.add("Orden $symbol sigue pendiente; vigilancia pausada hasta reanudar.")
-        return null
-    }
-
-    private suspend fun applyProtectionResult(
-        symbol: String,
-        exitSide: String,
-        result: StopLossProtectionResult
-    ): ProtectedState? {
-        return when (result) {
-            is StopLossProtectionResult.Protected -> {
-                ProtectedState(
-                    entryPrice = result.entryPrice,
-                    currentPrice = result.currentPrice,
-                    stopPrice = result.stopPrice,
-                    stopOrderId = result.stopOrderId,
-                    quantity = abs(result.positionAmount)
-                )
-            }
-            is StopLossProtectionResult.EmergencyCloseRequired -> {
-                logRepository.add("EMERGENCIA SL $symbol: ${result.reason}")
-                closeAtMarket(symbol, exitSide, result.quantity)
-                markClosed(symbol)
-                null
-            }
-            is StopLossProtectionResult.NoPosition -> {
-                logRepository.add(result.reason)
-                null
+            // 3. Revisar cada 4 segundos si Binance ya cerró la posición porque tocó el SL o TP reales.
+            delay(4000)
+            val amount = accountService.getPositionAmount(config.apiKey, config.apiSecret, position.symbol)
+            if (amount != null && amount == 0.0) {
+                logRepository.add("=========================================")
+                logRepository.add("BINANCE CERRÓ POSICIÓN: ${position.symbol} (Tocó SL o TP en exchange).")
+                logRepository.add("=========================================")
+                position = position.copy(isClosed = true)
+                positionRepository.update(position.symbol) { position }
+                orderService.cancelOpenOrdersStrictly(config.apiKey, config.apiSecret, position.symbol)
+                break
             }
         }
     }
 
-    private suspend fun placeTakeProfit(symbol: String, exitSide: String, takeProfit: Double) {
-        val result = orderService.placeClosePositionOrder(
-            apiKey = config.apiKey,
-            apiSecret = config.apiSecret,
-            symbol = symbol,
-            side = exitSide,
-            type = "TAKE_PROFIT_MARKET",
-            stopPrice = takeProfit
-        )
-        if (result.success) {
-            logRepository.add("TP fisico enviado para $symbol. Orden ${result.orderId}.")
-        } else {
-            logRepository.add("TP no colocado para $symbol: ${result.message}. SL fisico permanece activo.")
-        }
-    }
-
-    private suspend fun marketAlreadyCrossed(
-        symbol: String,
-        isLong: Boolean,
-        update: TrailingUpdate
-    ): Boolean {
-        val price = currentPrice(symbol, null)
-        if (price == 0.0) return false
-        return if (isLong) {
-            price <= update.newSl || price >= update.newTp
-        } else {
-            price >= update.newSl || price <= update.newTp
-        }
-    }
-
-    private suspend fun closeAtMarket(symbol: String, exitSide: String, quantity: Double) {
-        orderService.cancelOpenOrdersStrictly(config.apiKey, config.apiSecret, symbol)
+    // Único método autorizado para cerrar a mercado: SOLO EMERGENCIAS de comunicación.
+    private suspend fun emergencyClose(position: ActivePosition, closeSide: String) {
+        logRepository.add("EJECUTANDO PROTOCOLO DE EMERGENCIA: Cierre a Mercado de ${position.symbol}")
         orderService.executeGuaranteedClose(
             apiKey = config.apiKey,
             apiSecret = config.apiSecret,
-            symbol = symbol,
-            side = exitSide,
-            quantity = quantity,
+            symbol = position.symbol,
+            side = closeSide,
+            quantity = position.quantity,
             marginType = config.tipoMargen
         )
-        logRepository.add("Cierre MARKET ejecutado para $symbol.")
+        positionRepository.update(position.symbol) { it.copy(isClosed = true) }
+        orderService.cancelOpenOrdersStrictly(config.apiKey, config.apiSecret, position.symbol)
     }
-
-    private fun updatePositionPnl(symbol: String, price: Double, amount: Double, entryPrice: Double) {
-        val isLong = initialPosition.side.uppercase() in listOf("LONG", "BUY")
-        val distance = if (isLong) price - entryPrice else entryPrice - price
-        val pnl = distance * abs(amount)
-        val margin = (entryPrice * abs(amount)) / initialPosition.apalancamiento
-        val roe = if (margin > 0.0) (pnl / margin) * 100.0 else 0.0
-
-        positionRepository.update(symbol) {
-            it.copy(currentPrice = price, pnlNeto = pnl, roePct = roe)
-        }
-    }
-
-    private suspend fun currentPrice(symbol: String, snapshot: BinancePositionSnapshot?): Double {
-        return snapshot?.markPrice?.takeIf { it > 0.0 }
-            ?: tickerWebSocket.price(symbol)
-            ?: marketDataService.fetchCurrentPrice(symbol)
-    }
-
-    private fun markClosed(symbol: String) {
-        positionRepository.update(symbol) { it.copy(isClosed = true) }
-    }
-
-    private data class ProtectedState(
-        val entryPrice: Double,
-        val currentPrice: Double,
-        val stopPrice: Double,
-        val stopOrderId: Long,
-        val quantity: Double
-    )
 }

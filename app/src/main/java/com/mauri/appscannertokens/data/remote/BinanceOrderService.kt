@@ -2,13 +2,11 @@ package com.mauri.appscannertokens.data.remote
 
 import com.mauri.appscannertokens.domain.model.*
 import com.mauri.appscannertokens.data.repository.*
-import com.mauri.appscannertokens.data.remote.*
 import com.mauri.appscannertokens.presentation.ui.*
 import com.mauri.appscannertokens.presentation.viewmodel.*
 import com.mauri.appscannertokens.presentation.notifier.*
 import com.mauri.appscannertokens.engine.*
 import com.mauri.appscannertokens.service.*
-
 
 import com.google.gson.JsonParser
 import kotlinx.coroutines.delay
@@ -74,6 +72,42 @@ class BinanceOrderService(
             val msg = JSONObject(result.body.ifBlank { "{}" }).optString("msg", "Error desconocido")
             OrderExecutionResult(false, "Error: $msg")
         }
+    }
+
+    // NUEVO: Método específico para Stop Loss que utiliza el closePosition = true
+    suspend fun placeStopLoss(
+        apiKey: String,
+        apiSecret: String,
+        symbol: String,
+        sideToClose: String,
+        stopPrice: Double
+    ): StopOrderResult {
+        return placeClosePositionOrder(
+            apiKey = apiKey,
+            apiSecret = apiSecret,
+            symbol = symbol,
+            side = sideToClose,
+            type = "STOP_MARKET",
+            stopPrice = stopPrice
+        )
+    }
+
+    // NUEVO: Método específico para Take Profit que utiliza el closePosition = true
+    suspend fun placeTakeProfit(
+        apiKey: String,
+        apiSecret: String,
+        symbol: String,
+        sideToClose: String,
+        takeProfitPrice: Double
+    ): StopOrderResult {
+        return placeClosePositionOrder(
+            apiKey = apiKey,
+            apiSecret = apiSecret,
+            symbol = symbol,
+            side = sideToClose,
+            type = "TAKE_PROFIT_MARKET",
+            stopPrice = takeProfitPrice
+        )
     }
 
     suspend fun cancelOpenOrdersStrictly(apiKey: String, apiSecret: String, symbol: String): Boolean {
@@ -241,8 +275,8 @@ class BinanceOrderService(
         return getOpenOrders(apiKey, apiSecret, symbol)
             ?.firstOrNull {
                 it.type == "STOP_MARKET" &&
-                    it.side == side &&
-                    it.closePosition
+                        it.side == side &&
+                        it.closePosition
             }
     }
 

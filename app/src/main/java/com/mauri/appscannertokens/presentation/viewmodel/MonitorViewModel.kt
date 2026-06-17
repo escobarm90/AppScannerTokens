@@ -99,6 +99,11 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
         PositionManager.closePositionManual(getApplication(), configState.value, symbol)
     }
 
+    // 🔥 NUEVA FUNCIÓN: Elimina por completo la tarjeta de la interfaz
+    fun removePositionFromScreen(symbol: String) {
+        PositionManager.removePosition(symbol)
+    }
+
     private suspend fun executeAlert(request: AlertExecutionRequest, orderType: String): String {
         val currentConfig = configState.value.copy(tipoMargen = request.marginType)
         val sizing = OrderSizingCalculator.calculate(
@@ -110,37 +115,59 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
 
         if (sizing.quantity <= 0.0) return "No se pudo calcular cantidad para la orden"
 
-        val side = if (request.alert.senal == "LONG") "BUY" else "SELL"
-        val result = AppGraph.orderService.executeOrder(
-            apiKey = currentConfig.apiKey,
-            apiSecret = currentConfig.apiSecret,
-            symbol = request.alert.symbol,
-            side = side,
-            orderType = orderType,
-            quantity = sizing.quantity,
-            price = request.alert.precio,
-            marginType = request.marginType
-        )
+        if (orderType == "MARKET") {
+            // 1. Entradas a Mercado: Usamos el nuevo motor blindado.
+            // Calculamos la distancia en porcentaje (%) desde el precio absoluto de la alerta
+            // para que coincida con lo que espera PositionManager.
+            val slPct = kotlin.math.abs(request.alert.precio - request.alert.sl) / request.alert.precio * 100.0
+            val tpPct = kotlin.math.abs(request.alert.tp - request.alert.precio) / request.alert.precio * 100.0
 
-        if (result.success && result.orderId > 0L) {
-            LogRepository.add("Orden $orderType enviada: ${request.alert.symbol} | ID ${result.orderId}")
-            PositionManager.startMonitoring(
+            PositionManager.executeTrade(
                 context = getApplication(),
                 config = currentConfig,
                 symbol = request.alert.symbol,
-                signal = request.alert.senal,
-                entryPrice = request.alert.precio,
-                takeProfit = request.alert.tp,
-                stopLoss = request.alert.sl,
-                leverage = currentConfig.apalancamiento,
-                orderId = result.orderId,
+                signalSide = request.alert.senal,
                 quantity = sizing.quantity,
+                entryPrice = request.alert.precio,
+                slPct = slPct,
+                tpPct = tpPct,
                 atr = request.alert.atr
             )
-        } else {
-            LogRepository.add(result.message)
-        }
+            return "Orden MARKET enviada y blindada en el exchange."
 
-        return result.message
+        } else {
+            // 2. Entradas Límite: Lógica original (espera a que se llene primero)
+            val side = if (request.alert.senal == "LONG") "BUY" else "SELL"
+            val result = AppGraph.orderService.executeOrder(
+                apiKey = currentConfig.apiKey,
+                apiSecret = currentConfig.apiSecret,
+                symbol = request.alert.symbol,
+                side = side,
+                orderType = orderType,
+                quantity = sizing.quantity,
+                price = request.alert.precio,
+                marginType = request.marginType
+            )
+
+            if (result.success && result.orderId > 0L) {
+                LogRepository.add("Orden $orderType enviada: ${request.alert.symbol} | ID ${result.orderId}")
+                PositionManager.startMonitoring(
+                    context = getApplication(),
+                    config = currentConfig,
+                    symbol = request.alert.symbol,
+                    signal = request.alert.senal,
+                    entryPrice = request.alert.precio,
+                    takeProfit = request.alert.tp,
+                    stopLoss = request.alert.sl,
+                    leverage = currentConfig.apalancamiento,
+                    orderId = result.orderId,
+                    quantity = sizing.quantity,
+                    atr = request.alert.atr
+                )
+            } else {
+                LogRepository.add(result.message)
+            }
+            return result.message
+        }
     }
 }

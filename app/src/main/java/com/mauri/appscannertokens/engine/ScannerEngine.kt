@@ -36,7 +36,9 @@ class ScannerEngine(
     private val signalValidator: SignalValidator,
     private val riskCalculator: RiskCalculator,
     private val alertRepository: AlertRepository,
-    private val logRepository: LogRepository
+    private val logRepository: LogRepository,
+    private val cooldownMap: ConcurrentHashMap<String, Long> = ConcurrentHashMap<String, Long>(),
+    private val COOLDOWN_DURATION_MS: Long = 40 * 60 * 1000L
 ) {
     private val marketData = ConcurrentHashMap<String, TokenData>()
     private val spreadCache = ConcurrentHashMap<String, Double>()
@@ -73,6 +75,10 @@ class ScannerEngine(
             val config = configRepository.load()
             for (symbol in symbols) {
                 if (!currentCoroutineContext().isActive || !TradingScannerService.isRunning) break
+                val lastAlertTime = cooldownMap[symbol] ?: 0L
+                if (System.currentTimeMillis() - lastAlertTime < COOLDOWN_DURATION_MS) {
+                    continue // Salta la moneda inmediatamente, no gasta CPU
+                }
                 val tokenData = marketData[symbol] ?: continue
                 val barCount = tokenData.series.barCount
                 val spread = spreadCache[symbol] ?: 0.0
@@ -140,6 +146,7 @@ class ScannerEngine(
                         signalValidator.markAccepted(risk.alert.symbol)
                         alertRepository.add(risk.alert)
                         AlertNotifier.playNotification(context)
+                        cooldownMap[risk.alert.symbol] = System.currentTimeMillis()
                     }
                 }
             }
